@@ -62,7 +62,7 @@ The general build strategy will be as follows.
     target Android version).
  2. Extract `temp.apk` into `build` and add a `build/lib/` directory.
  3. Compile our C code into a `build/lib/aarch64/libseglapp.so` shared library
-    using the Android NDK clang toolchain.
+    using the Android NDK `clang` toolchain.
  4. Re-compress the `build` directory with `zip` into `temp2.apk`.
  5. Run the Android SDK `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
  6. Sign `seglapp.apk` with `apksigner` from the Android SDK.
@@ -254,10 +254,10 @@ on your Android device. It may be necessary to run `adb` under `sudo`,
 or to `su` and run `adb` as root, depending your system and user permissions.
 
 When you try opening the app, you should be
-met with a black screen. This makes perfect sense: we haven't opened a
-window yet, let alone drawn anything. What we have done, however, is print some log messages.
+met with a black screen. This makes perfect sense: we haven't drawn anything
+yet. What we have done, however, is print some log messages.
 The logs for everything happening on a connected device can be viewed with
-`adb shell logcat`. That command will produce a deluge of information
+`adb shell logcat`. That command will usually produce a deluge of information
 which, while potentially helpful for complex debugging if piped to a file, is
 of little use as command line output. To view only the logs produced
 by our code, we can provide `logcat` with a set of filters.
@@ -298,7 +298,7 @@ be going the `dlopen`
 route. If someone ever needs to create their own
 Android sysroot (e.g. they don't have access
 to an NDK distribution), then `libEGL.so` is one less
-build dependency for our app. 
+build dependency. 
 
 ```c
 /* ./src/main.c */
@@ -848,7 +848,7 @@ $ adb install seglapp.apk
 ```
 
 Running `seglapp` should now display a varying solid color
-background which can bee seemlessly suspended and resumed.
+background which can be seemlessly suspended and resumed.
 
 ## Multi-architecture builds
 
@@ -882,10 +882,8 @@ through the `android_native_app_glue.c` source file).
 
 As mentioned above, it is a very good idea to change
 the app and org names when building a real `.apk` package, and to load
-the full EGL and OpenGL ES 2.0 APIs into the vtables. A more
-finished version of this example template, complete with
-with build scripts, is available on the [GitHub page][9]
-associated with this article.
+the full EGL and OpenGL APIs into the vtables. A more
+finished version of this example is available on [GitHub][9].
 
 [1]: https://github.com/cnlohr/rawdrawandroid
 [2]: https://github.com/permutationlock/libavengraph
