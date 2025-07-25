@@ -1,0 +1,2809 @@
+---
+.title = "Dumb Cycle",
+.date = @date("2024-04-12T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = false,
+.custom = {
+	"git" : "DumbCycle"
+},
+--- 
+
+> *What is the easiest way to draw pixels to the screen on a modern Linux system?*
+
+I have had this question bouncing around in the back of my mind for a long time.
+Some time ago I made a few tiny applications that displayed images using the `/dev/fb0`
+device. Unfortunately, [fbdev][1] is a legacy subsystem that won't always be present.
+Fortunately, the modern [Direct Rendering Manager][2] subsystem provides corresponding
+functionality via "dumb buffer" objects.
+
+[The DumbCycle game in action.](<$image.asset("dumb_cycle.gif")>)
+
+DumbCycle is a minimal game that I created using
+the Direct Rendering Manager subsystem of Linux. In order to meet my criteria
+it had to:
+
+ 1. run on any modern `x86_64` Linux machine with a keyboard driver and a
+    video card driver supporting 32bit RGBA pixels;
+ 2. compile with any C compiler that supports the C99 standard (or later);
+ 3. link with a basic `x86_64` assembly runtime (no `libc` or other libraries).
+
+The above restrictions made C preprocesser directives mostly unnecessary,
+so none were be used. I.e. `#include`, `#define`, etc. were not allowed.
+
+Code for the finished game is available on [GitHub][3]. Each commit
+corresponds to a section of this article.
+
+## Requirements
+                        
+To build the game you will need a C compiler that
+supports at least the C99 standard, e.g.
+[gcc](https://gcc.gnu.org/),
+[clang](https://clang.llvm.org/),
+[zig cc](https://ziglang.org/),
+[cproc](https://sr.ht/~mcf/cproc/).
+You will also need
+[make](https://www.gnu.org/software/make/) and
+[binutils](https://www.gnu.org/software/binutils/)
+for the `as` assembler and
+`ld` linker. To run the virtual test
+environment discussed later in the article you will need
+[QEMU](https://www.qemu.org/).
+
+By design the game will only build for
+`x86_64` Linux.
+On Windows the default Ubuntu
+[WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install)
+should work as a development environment after adding the `build-essential`
+and `qemu-system` packages.
+If you don't have an `x86_64`
+Linux or Windows system then
+you will need cross-compilation tools and a virtual
+machine, e.g.
+[musl-cross-make](https://github.com/richfelker/musl-cross-make)</a> and
+[QEMU](https://www.qemu.org/). 
+
+## Creating an executable: an entry point in assembly
+
+To link a basic
+[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format)
+executable on Linux we need to define an entry point
+symbol that runs our code and then calls the `exit` system call. The default
+entry point symbol is `_start` which we will define in the file `src/runtime.s`.
+
+```nasm
+.text
+.extern _cstart
+.global _start
+_start:
+    xor %rbp, %rbp
+    mov (%rsp), %rdi
+    mov %rsp, %rsi
+    add $8, %rsi
+    call _cstart
+    ud2
+
+.section .note.GNU-stack,"",@progbits
+```
+
+Linux follows the
+[System V ABI](https://wiki.osdev.org/System_V_ABI).
+The ABI states that at the start of
+process execution the stack pointer register
+`rsp` will contain a 16 byte aligned
+pointer to the top of the stack. The stack will contain
+a positive 32-bit integer indicating the number of
+program argument strings,
+followed by a null-terminated array of string
+pointers of the given length.
+Other values may also be present further up the stack, but we can
+ignore them for our purposes.
+
+We first zero out the base pointer `rbp` to mark that this is the top
+stack frame of our process.
+Next we copy the argument count from the stack into the first parameter
+register `rdi` and compute a pointer to the array of argument string
+pointers in the second parameter register `rsi`.
+Finally, we call the
+function `_cstart` that will be defined in `src/main.c`.
+An undefined instruction `ud2` is inserted following the call to
+`_cstart` to crash the program if `_cstart` happens to return.
+The `.note.GNU-stack` section indicates
+to the assembler that the stack memory should
+not be executable.
+
+We'll also create a `src/main.c` file with a dummy
+`_cstart` function.
+                    
+```c
+void _cstart(int argc, char **argv) {}
+```
+
+Next, let's add a simple `Makefile` to build the executable.
+
+```make
+CC = gcc
+CFLAGS = -fno-stack-protector
+LD = ld
+LDFLAGS =
+AS = as
+ASFLAGS =
+
+all: dumb_cycle
+clean: clean_dumb_cycle
+
+dumb_cycle: src/main.o src/runtime.o
+        $(LD) $(LDFLAGS) -o dumb_cycle src/main.o src/runtime.o
+clean_dumb_cycle: clean_main clean_runtime
+        rm -f dumb_cycle
+
+src/main.o: src/main.c
+        $(CC) $(CFLAGS) -c -o src/main.o src/main.c
+clean_main:
+        rm -f src/main.o
+
+src/runtime.o: src/runtime.s
+        $(AS) $(ASFLAGS) -o src/runtime.o src/runtime.s
+clean_runtime:
+        rm -f src/runtime.o
+```
+
+If we build and run our program it should terminate with an illegal
+instruciton.
+
+```bash
+$ make
+$ ./dumb_cycle
+Illegal instruction (core dumped)
+```
+
+## Exiting without crashing: Linux system calls
+
+In order to exit from our process without crashing we need to invoke the
+Linux `exit` system
+call. A system call is made using the `syscall` instruction,
+similar to calling a function in assembly with the `call` instruction.
+Rather than specifying a function address to jump to, however, `syscall` instead
+looks at the `rax` register for the number of the system call to execute.
+Arguments are passed in registers similar to function calls, but the
+register order is slightly different (see the [System V ABI](https://wiki.osdev.org/System_V_ABI)).
+
+We will define a set of assembly functions to call from C
+that will execute
+system calls. The first argument to each function will be the system call
+number. Linux syscalls may have up to six arguments, so we will implement a
+separete function for each possible argument count. The registers are
+re-arranged to place the syscall number in `rax` and the remaining arguments
+into the appropriate syscall argument registers.
+
+```nasm
+.global syscall0
+syscall0:
+    movq %rdi, %rax
+    syscall
+    ret
+.type syscall0, @function
+.size syscall0, .-syscall0
+
+.global syscall1
+syscall1:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    syscall
+    ret
+.type syscall1, @function
+.size syscall1, .-syscall1
+
+.global syscall2
+syscall2:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    syscall
+    ret
+.type syscall2, @function
+.size syscall2, .-syscall2
+
+.global syscall3
+syscall3:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    movq %rcx, %rdx
+    syscall
+    ret
+.type syscall3, @function
+.size syscall3, .-syscall3
+
+.global syscall4
+syscall4:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    movq %rcx, %rdx
+    movq %r8, %r10
+    syscall
+    ret
+.type syscall4, @function
+.size syscall4, .-syscall4
+
+.global syscall5
+syscall5:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    movq %rcx, %rdx
+    movq %r8, %r10
+    movq %r9, %r8
+    syscall
+    ret
+.type syscall5, @function
+.size syscall5, .-syscall5
+
+.global syscall6
+syscall6:
+    movq %r9, %r11
+    movq %rdi, %rax
+    movq 8(%rsp), %r9
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    movq %rcx, %rdx
+    movq %r8, %r10
+    movq %r11, %r8
+    syscall
+    ret
+.type syscall6, @function
+.size syscall6, .-syscall6
+```
+
+Now we can define a function stub for each syscall function. I like to refer
+to basic C types by short sign-and-size aliases, so we will also
+add a `typedef` statement for each relevant
+type. Finally, we'll need to define `memcpy` and
+`memset` as they may be required by the C compiler.
+
+```c
+typedef short i16;
+typedef unsigned short u16;
+typedef int i32;
+typedef unsigned int u32;
+typedef long i64;
+typedef unsigned long u64;
+
+static void *memcpy(void *restrict dst, const void *restrict src, u64 len) {
+    const char *src_bytes = src;
+    char *dst_bytes = dst;
+    for (u64 i = 0; i < len; i += 1) {
+        dst_bytes[i] = src_bytes[i];
+    }
+
+    return dst;
+}
+
+static void *memset(void *mem, int val, u64 len) {
+    char *mem_bytes = mem;
+    for (u64 i = 0; i < len; i += 1) {
+        mem_bytes[i] = val;
+    }
+
+    return mem;
+}
+
+u64 syscall0(u64 scid);
+u64 syscall1(u64 scid, u64 a1);
+u64 syscall2(u64 scid, u64 a1, u64 a2);
+u64 syscall3(u64 scid, u64 a1, u64 a2, u64 a3);
+u64 syscall4(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4);
+u64 syscall5(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);
+u64 syscall6(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6);
+
+enum syscall {
+    SYS_EXIT = 60,
+};
+
+static void exit(i32 error_code) {
+    syscall1(SYS_EXIT, (u64)error_code);
+}
+
+void _cstart(i32 argc, char **argv) {
+    exit(0);
+}
+```
+
+To make a specific system call we need to pass the corresponding
+syscall number as the first parameter. A quick and simple
+way to find the `exit` syscall number and required arguments is to
+use `grep` to search the Linux source.
+
+```bash
+$ git clone --depth=1 https://github.com/torvalds/linux.git
+$ cat linux/arch/x86/entry/syscalls/syscall_64.tbl | grep "exit"
+60      common  exit                    sys_exit
+231     common  exit_group              sys_exit_group
+$ grep -rn "SYSCALL_DEFINE.\?(exit," linux/
+linux/kernel/exit.c:992:SYSCALL_DEFINE1(exit, int, error_code)
+```
+
+The syscall number for `exit` is `60` and it takes a single integer
+`error_code` argument. The error code indicates
+whether the process completed successfully or encounterd an error.
+
+```bash
+$ make
+$ ./dumb_cycle
+```
+
+Our executable now exits cleanly!
+
+## Greeting the world: error handling and file descriptors
+
+Exiting cleanly is nice, but it would be even nicer to have some input and
+output. Before defining C functions
+to make the `write` system call, we will need to write a little
+boilerplate to manage error handling.
+
+The standard way for
+system calls to return error values is to place a value between `-4095`
+and `-1` in the return register. It is therefore necessary to test if the
+return value of a system call fits in this range and, if so, extract the error
+code.
+
+```c
+enum syscall {
+    SYS_WRITE = 1,
+    SYS_EXIT = 60,
+};
+
+enum error_code {
+    EINTR = 4,
+};
+
+static i32 syscall_error(u64 return_value) {
+    if (return_value > -4096UL) {
+        return (i32)(-return_value);
+    }
+    return 0;
+}
+
+static i64 write(i32 fd, char *bytes, i64 bytes_len) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall3(SYS_WRITE, (u64)fd, (u64)bytes, (u64)bytes_len);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    if (error != 0) {
+        return -error;
+    }
+    return (i64)return_value;
+}
+```
+
+There is one particular syscall error that often needs special handling:
+`EINTR`. The `EINTR` error has code `4` on `x86_64` and indicates that
+the system
+call was interrupted by a signal. If we hit an `EINTR` error code we should
+retry the given syscall.
+
+Now we can write a classic greeting program. The first argument we
+need to pass to the `write` syscall is the file descriptor that
+we want to write
+to. There are three file descriptors that are open by default for all
+processes: descriptor `0` is standared input, descriptor `1` is standard
+output, and descriptor `2` is standard error.
+
+```c
+enum std_fd {
+    STDIN = 0,
+    STDOUT = 1,
+    STDERR = 2,
+};
+
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_WRITE_STDOUT,
+};
+
+i32 main(i32 argc, char **argv) {
+    char greeting[] = "Hello, World!\n";
+    i64 len = write(STDOUT, greeting, sizeof(greeting));
+    if (len < 0){
+        return MAIN_ERROR_WRITE_STDOUT;
+    }
+    return MAIN_ERROR_NONE;
+}
+
+void _cstart(i32 argc, char **argv) {
+    exit(main(argc, argv));
+}
+```
+
+Building and running we should now receive a friendly message.
+
+```bash
+$ make
+$ ./dumb_cycle
+Hello, World!
+```
+## Accessing the filesystem
+
+Almost everything in Linux is treated as a file, and thus we will need
+some system calls to access the file system: `read`, `open` and `close`.
+
+```c
+enum syscall {
+    SYS_READ = 0,
+    SYS_WRITE = 1,
+    SYS_OPEN = 2,
+    SYS_CLOSE = 3,
+    SYS_EXIT = 60,
+};
+```
+```c
+static i64 read(i32 fd, char *bytes, i64 bytes_len) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall3(SYS_READ, (u64)fd, (u64)bytes, (u64)bytes_len);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    if (error != 0) {
+        return -error;
+    }
+    return (i64)return_value;
+}
+```
+```c
+enum open_mode {
+    O_RDONLY = 0,
+    O_WRONLY = 1,
+    O_RDWR = 2,
+};
+
+static i32 open(char *fname, i32 mode, i32 flags) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall3(SYS_OPEN, (u64)fname, (u64)mode, (u64)flags);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    if (error != 0) {
+        return -error;
+    }
+    return (i32)return_value;
+}
+
+static i32 close(i32 fd) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall1(SYS_CLOSE, (u64)fd);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    return error;
+}
+```
+
+We can now open files, read and write to them, and close them. For a simple
+example we will have our program try to open a file `name.txt`. If the file
+opens successfuly, the program will read the contents into the `name` character
+array.
+If the file fails to open, the program will
+ask the user to enter a name and then read the name from the standard input
+instead. Finally, the program will print a greeting using the given name.
+
+```c
+enum main_error {
+   MAIN_ERROR_NONE = 0,
+   MAIN_ERROR_WRITE_STDOUT,
+   MAIN_ERROR_READ_NAME,
+};
+
+i32 main(i32 argc, char **argv) {
+   i64 len;
+   i32 name_fd = open("name.txt", O_RDONLY, 0);
+   if (name_fd < 0) {
+       char question[] = "What is your name?\n";
+       len = write(STDOUT, question, sizeof(question));
+       if (len < 0){
+           return MAIN_ERROR_WRITE_STDOUT;
+       }
+       name_fd = STDIN;
+   }
+
+   char name[255];
+   i64 name_len = read(name_fd, name, sizeof(name));
+   if (name_len < 0) {
+       return MAIN_ERROR_READ_NAME;
+   }
+
+   char greeting1[] = "Hello ";
+   len = write(STDOUT, greeting1, sizeof(greeting1) - 1);
+   if (len < 0) {
+       return MAIN_ERROR_WRITE_STDOUT;
+   }
+
+   len = write(STDOUT, name, name_len);
+   if (len < 0) {
+       return MAIN_ERROR_WRITE_STDOUT;
+   }
+
+   return MAIN_ERROR_NONE;
+}
+```
+
+We can now run and test that both methods work correctly.
+
+```bash
+$ make
+$ ./dumb_cycle
+What is your name?
+Aven
+Hello Aven
+$ echo "Aven" > name.txt
+$ ./dumb_cycle
+Hello Aven
+```
+
+## Keeping time: the `clock_gettime` system call
+
+To manage game updates and draw frames we will need some method to track how
+much time has passed. The standard Linux system call for tracking time in
+high resolution is `clock_gettime`.
+
+```c
+enum syscall {
+    // ...
+    SYS_CLOCK_GETTIME = 228,
+};
+```
+```c
+enum clock_id {
+    CLOCK_MONOTONIC = 1,
+};
+
+struct timespec {
+    i64 sec;
+    i64 nsec;
+};
+
+static i32 clock_gettime(i32 clock_id, struct timespec *timespec) {
+    u64 return_value = syscall2(
+        SYS_CLOCK_GETTIME,
+        (u64)clock_id,
+        (u64)timespec
+    );
+    return syscall_error(return_value);
+}
+
+static i64 time_since_ns(struct timespec *end, struct timespec *start) {
+    i64 seconds = end->sec - start->sec;
+    return (seconds * 1000L * 1000L * 1000L) + end->nsec - start->nsec;
+}
+```
+
+The `clock_gettime` system call takes a clock ID and writes the current timestamp
+from the given clock into the provided `timespec` output parameter. In order to
+track time we will call `clock_gettime` to get two timestamps and compute the
+time since with `time_since_ns`.
+
+It is quite inefficient to make a full system call for `clock_gettime` since
+such a call would usually be made using
+[VDSO](https://www.man7.org/linux/man-pages/man7/vdso.7.html). However, I have decided
+that the runtime setup required for VDSO calls is beyond the scope of this
+singularly focused article.
+
+```c
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_WRITE_STDOUT,
+    MAIN_ERROR_CLOCK_GETTIME,
+};
+
+i32 main(i32 argc, char **argv) {
+    struct timespec last, now;
+    i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
+    if (error) {
+        return MAIN_ERROR_CLOCK_GETTIME;
+    }
+
+    i64 len;
+    i32 steps = 0;
+    while (steps < 5) {
+        i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+
+        if (time_since_ns(&now, &last) >= 1000L * 1000L * 1000L) {
+            last = now;
+            steps += 1;
+
+            len = write(STDOUT, ".", 1);
+            if (len < 0) {
+                return MAIN_ERROR_WRITE_STDOUT;
+            }
+        }
+    }
+
+    len = write(STDOUT, "\n", 1);
+    if (len < 0) {
+        return MAIN_ERROR_WRITE_STDOUT;
+    }
+
+    return MAIN_ERROR_NONE;
+}
+```
+
+Our program now prints a dot every second for five seconds.
+
+```bash
+$ make
+$ ./dumb_cycle
+.....
+```
+
+## Detecting user input: the `poll` syscall
+
+In order to run a game loop we will need to be able to read user input while
+updating the game state and rendering the screen. To accomplish this we will
+need some way of detecting when user input is available to read from a given
+file descriptor. There are many different ways to
+accomplish this on Linux, but the `poll` system call is simple and
+suits our use case perfectly.
+
+```c
+enum syscall {
+    // ...
+    SYS_POLL = 7,
+    // ...
+};
+```
+```c
+enum poll_event {
+    POLLIN = 1,
+};
+
+struct pollfd {
+    i32 fd;
+    i16 events;
+    i16 revents;
+};
+
+static i32 poll(struct pollfd *fds, i64 fds_len, i32 time_ms) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall3(SYS_POLL, (u64)fds, (u64)fds_len, (u64)time_ms);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    if (error != 0) {
+        return -error;
+    }
+    return (i32)return_value;
+}
+```
+
+The `poll` syscall takes an array of `struct pollfd` values, the length of the
+array, and a number of milliseconds to wait for an event to occur.
+The `pollfd` struct stores a file descriptor `fd` to monitor, a 16 bit integer
+`events` indicating which events to poll for, and a corresponding
+field `revents` where the events that actually occurred will be written.
+We will only be looking for the `POLLIN` event that signals when a file
+descriptor has data available to be read.
+
+As an example we can change our program to poll for data on the standard
+input file descriptor while it loops printing elipses.
+
+```c
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_WRITE_STDOUT,
+    MAIN_ERROR_CLOCK_GETTIME,
+    MAIN_ERROR_POLL,
+};
+
+i32 main(i32 argc, char **argv) {
+    char greeting[] = "Enter a message to exit.\n";
+    i64 len = write(STDOUT, greeting, sizeof(greeting) - 1);
+    if (len < 0) {
+        return MAIN_ERROR_WRITE_STDOUT;
+    }
+
+    struct timespec last, now;
+    i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
+    if (error) {
+        return MAIN_ERROR_CLOCK_GETTIME;
+    }
+
+    struct pollfd stdin_pollfd = { .fd = STDIN, .events = POLLIN, };
+
+    i32 steps = 0;
+    while (1) {
+        i64 events = poll(&stdin_pollfd, 1, 0);
+        if (events < 0) {
+            return MAIN_ERROR_POLL;
+        }
+
+        if (events > 0) {
+            char dummy_buffer[255];
+            read(STDIN, dummy_buffer, sizeof(dummy_buffer));
+            break;
+        }
+
+        i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+
+        if (time_since_ns(&now, &last) >= 1000L * 1000L * 1000L) {
+            last = now;
+            steps += 1;
+
+            len = write(STDOUT, ".", 1);
+            if (len < 0) {
+                return MAIN_ERROR_WRITE_STDOUT;
+            }
+        }
+    }
+
+    return MAIN_ERROR_NONE;
+}
+```
+
+We now have an application that will continually print `'.'` characters until
+the user enters a message.
+						
+```bash
+$ make
+$ ./dumb_cycle
+Enter a message to exit.
+....Hey!
+```
+
+## Making memory: pages and arenas
+
+It is often necessary to allocate memory during runtime, such as when it
+isn’t known at compile time how much space a block of data will take up.
+In standard C dynamic memory
+allocation is accomplished using the `malloc` or `calloc` functions
+from `libc`.
+Since we aren’t linking with `libc`, we will build a very simple
+memory allocation scheme from scratch.
+
+One way to request memory from the Linux kernel is the
+`mmap` system call.
+
+```c
+enum syscall {
+    // ...
+    SYS_MMAP = 9,
+    // ...
+};
+```
+```c
+enum mmap_prot {
+    PROT_READ = 1,
+    PROT_WRITE = 2,
+};
+
+enum mmap_flag {
+    MAP_SHARED = 0x01,
+    MAP_ANONYMOUS = 0x20,
+};
+
+static void *mmap(
+    void *hint,
+    i64 size,
+    i32 prot,
+    i32 flags,
+    i32 fd,
+    i64 offset
+) {
+    u64 return_value = syscall6(
+        SYS_MMAP,
+        (u64)hint,
+        (u64)size,
+        (u64)prot,
+        (u64)flags,
+        (u64)fd,
+        (u64)offset
+    );
+    i32 error = syscall_error(return_value);
+    if (error != 0) {
+        return 0;
+    }
+    return (void *)return_value;
+}
+```
+
+An `mmap` call asks the operating system to allocate contiguous blocks of
+virtual memory called pages. On Linux the page size
+is usually `4096` bytes. The `hint` argument suggests a virtual address to
+start the allocation. The `prot` argument tells the OS what permissions
+the allocated memory should have, e.g. whether it is readable (`PROT_READ`)
+and/or writable (`PROT_WRITE`).
+The `flags` argument indicates
+other properties of the allocation such as whether the mapped memory is shared
+with child processes (`MAP_SHARED`) and/or not backed by a file descriptor
+(`MAP_ANONYMOUS`). The `fd` flag is used to provide a backing file descriptor
+and the `offset` flag indicates where in the associated file the mapping
+should start.
+
+Making a call to `mmap` for every allocation is slow (system calls
+generally take much longer than function calls) and wasteful (we must
+allocate multiples of the page size).
+Both problems can be solved with memory arenas, also known as bump
+allocators. An arena is a simple struct that stores a pair of pointers:
+one to the start of a block of memory, and one to the end of the block.
+We will create a new `src/mem.c` file that will contain our arena code.
+
+```c
+typedef long i64;
+typedef unsigned long u64;
+
+struct arena {
+    char *start;
+    char *end;
+};
+
+void *alloc(struct arena *arena, i64 size) {
+    i64 available = arena->end - arena->start;
+    if (size > available) {
+        return 0;
+    }
+    char *p = arena->start;
+    arena->start += size;
+    for (i64 i = 0; i < size; ++i) {
+        p[i] = 0;
+    }
+    return p;
+}
+```
+
+To “allocate” memory from an arena, we simply check that there is enough space
+and then return the `start` pointer, setting the new
+`start` to point at the spot in memory just after the allocated chunk.
+
+Some C types are expected to be `n` byte aligned in memory, i.e. have a memory
+address that is evenly divisible by `n`.
+On `x86_64` Linux the maximum alignment required by any type is `16` bytes, so
+we will simply ensure that our arena allocator aligns all pointers to
+`16` bytes.
+
+```c
+void *alloc(struct arena *arena, i64 size) {
+    i64 available = arena->end - arena->start;
+    i64 padding = -(i64)arena->start & (16 - 1);
+    if (size > (available - padding)) {
+        return 0;
+    }
+    char *p = arena->start + padding;
+    arena->start = p + size;
+    for (i64 i = 0; i < size; ++i) {
+        p[i] = 0;
+    }
+    return p;
+}
+```
+
+We’ll need to add build steps for `src/mem.c` to our `Makefile`.
+						
+```make
+dumb_cycle: src/main.o src/mem.o src/runtime.o
+        $(LD) $(LDFLAGS) -o dumb_cycle src/main.o src/mem.o src/runtime.o
+clean_dumb_cycle: clean_main clean_mem clean_runtime
+        rm -f dumb_cycle
+
+src/mem.o: src/mem.c
+        $(CC) $(CFLAGS) -c -o src/mem.o src/mem.c
+clean_mem:
+        rm -f src/mem.o
+```
+
+Now we can make one `mmap` call at the start of our program and create an `8MB`
+arena large enough for all our dynamic memory allocations.
+
+```c
+struct arena {
+    char *start;
+    char *end;
+};
+
+void *alloc(struct arena *arena, i64 size);
+
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_MMAP,
+};
+
+i32 main(i32 argc, char **argv) {
+    i64 arena_size = 2000 * 4096;
+    char *mem = mmap(
+        0,
+        arena_size,
+        PROT_WRITE | PROT_READ,
+        MAP_SHARED | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+    if (mem == 0) {
+        return MAIN_ERROR_MMAP;
+    }
+
+    struct arena arena = { .start = mem, .end = mem + arena_size };
+    char *buf = 0;
+    i64 buf_len = 0;
+
+    return MAIN_ERROR_NONE;
+}
+```
+
+You may be wondering why we created a separate `src/mem.c`
+file. The truth is that it would almost certainly be
+fine to place the definition of the `alloc`
+function directly in the
+`src/main.c` file, but it would not be strictly correct according to
+the C99 standard.
+
+In the eyes of the C99 standard, when data is written into memory that has no
+declared type, e.g. memory
+returned by `mmap`, the memory assumes the effective type of the data
+that was written to it. A new write to the same memory can change the
+effective type again, but the memory will not return to its initial untyped
+state.
+
+With an arena it may be the case that the same memory is used for different
+purposes, e.g. if a temporary copy of an arena is used in a confined scope.
+If `alloc` was defined within the same translation unit as the code that calls
+it, then the C compiler might deduce at compile time that
+memory is being re-used. In such a case a `void *` returned by a call to
+`alloc` would point to memory that has
+an effective type from a prior write.
+
+In most cases it is fine if the memory returned by `alloc` has an effective type:
+we will almost always explicitly write data into
+allocated memory before we read from it.
+Unfortunately, in the next section we will run into a situation where
+technicalities arise.
+
+For a contrived example of how issues crop up, let us suppose
+that we have an arena set up as shown above and we run into the following situation.
+
+```c
+{
+    struct arena temp_arena = arena;
+    float *f = alloc(&temp_arena, sizeof(*f));
+    *f = 3.1415f;
+}
+int *i = alloc(&arena, sizeof(*i));
+foo(i);
+int x = *i;
+```
+
+The implemenation of `foo` is defined in a separate translation unit as follows.
+
+```c
+void foo(int *i) {
+    *i = 42;
+}
+```
+
+While we know that calling `foo(i)` writes an `int` to
+`*i`, the C compiler does not know about this write.
+The compiler will instead believe the effective type of the memory pointed to by `i` to be
+`float`: the last write it can see to that memory is
+`*f = 3.1415f`.
+Thus dereferencing `i` to read an `int` value is <i>technically</i> undefined behavior.
+
+If the memory returned by `alloc` had no declared or effective type, then
+dereferencing `i` to read an `int` value would be perfectly fine:
+it is valid to read untyped memory through a typed pointer so long as it
+does in fact contain a valid representation for that type.
+By defining `alloc` in a separate translation
+unit we force the compiler to consider each call to `alloc`
+as returning a pointer to unknown memory with no declared type.
+
+## Interacting with I/O devices: the `ioctl` system call
+
+Our game will need to receive keyboard input and draw pixels to the
+screen. Both of these tasks will require the `ioctl` system call, short for
+“input output control.”
+
+```c
+enum syscall {
+    // ...
+    SYS_IOCTL = 16,
+    // ...
+};
+```
+```c
+enum ioctl_dir {
+    IOCTL_WRITE = 1,
+    IOCTL_READ = 2,
+    IOCTL_RDWR = 3,
+};
+
+static i32 ioctl(i32 fd, u32 dir, u32 type, u32 number, u32 size, char *arg) {
+    u32 number_bits = number & 0xff;
+    u32 type_bits = (type & 0xff) < 8;
+    u32 size_bits = (size & 0x3fff) < 16;
+    u32 dir_bits = (dir & 0x3) < 30;
+    u32 request = dir_bits | size_bits | type_bits | number_bits;
+
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall3(SYS_IOCTL, (u64)fd, (u64)request, (u64)arg);
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    return error;
+}
+```
+
+The `fd` argument is the file descriptor of the device in question.
+The `dir` argument indicates whether the request is writing and/or reading.
+The `type` argument indicates the the high level type of the request, e.g.
+a DRM request. The `number` parameter indicates the
+specific request being made for the given `type`. Finally, `size` indicates the
+size in bytes of the data pointed to by `arg`.
+
+Instead of taking `dir`, `type`, `number`, and `size` arguments, the standard
+C `ioctl` implementation will take a single `request` integer argument.
+It is expected that callers will use C macros to pre-pack the bits of the
+request. Since we are not
+using C macros in this project, and we are aiming for
+clarity over performance, it makes more sense for us to pass each part of the
+request separately and then pack the request in the `ioctl` function.
+					
+## Keyboard input: finding and reading keyboard devices
+
+Reading from the standard input works for text lines, but for realtime key
+presses we really need direct access to the keyboard device.
+
+If the `/dev`
+fileystem has been mounted correctly then a `/dev/input` directory will exist
+and contain a file for each input device.
+We don’t know which file corresponds to the keyboard that the user
+will actually be pressing keys on, so we’ll simply have to iterate through
+all of them and open a file descriptor for each device that might be a
+keyboard.
+
+```c
+enum ioctl_type {
+    IOCTL_EV = (i32)'E',
+};
+
+enum ev_ioctl {
+    EV_IOCTL_GET_BIT = 0x20,
+    EV_IOCTL_GET_KEY = 0x21,
+    EV_IOCTL_GRAB = 0x90,
+};
+
+enum ev_bits {
+    EV_KEY = 0x1,
+    EV_MAX = 0x1f,
+};
+
+enum ev_key_bits {
+    KEY_ESC = 1,
+    KEY_W = 17,
+    KEY_A = 30,
+    KEY_S = 31,
+    KEY_D = 32,
+    KEY_MAX = 0x2ff
+};
+
+static i32 test_bit(char *bytes, i32 len, i32 bit_num) {
+    i32 byte_index = bit_num / 8;
+    i32 bit_index = bit_num % 8;
+    if (byte_index >= len) {
+        return 0;
+    }
+
+    return (bytes[byte_index] & (1 < bit_index)) != 0;
+}
+
+static i32 is_keyboard(i32 fd) {
+    char evio_bits[EV_MAX / 8 + 1];
+    i32 error = ioctl(
+        fd,
+        IOCTL_READ,
+        IOCTL_EV,
+        EV_IOCTL_GET_BIT,
+        sizeof(evio_bits),
+        evio_bits
+    );
+    if (error != 0) {
+        return 0;
+    }
+    if (!test_bit(evio_bits, sizeof(evio_bits), EV_KEY)) {
+        return 0;
+    }
+
+    char evio_key_bits[KEY_MAX / 8 + 1];
+    error = ioctl(
+        fd,
+        IOCTL_READ,
+        IOCTL_EV,
+        EV_IOCTL_GET_KEY,
+        sizeof(evio_key_bits),
+        evio_key_bits
+    );
+    if (error != 0) {
+        return 0;
+    }
+    if (
+        test_bit(evio_key_bits, sizeof(evio_key_bits), KEY_ESC) &    
+        test_bit(evio_key_bits, sizeof(evio_key_bits), KEY_W) &
+        test_bit(evio_key_bits, sizeof(evio_key_bits), KEY_A) &
+        test_bit(evio_key_bits, sizeof(evio_key_bits), KEY_S) &
+        test_bit(evio_key_bits, sizeof(evio_key_bits), KEY_D)
+    ) {
+        return 1;
+    }
+    return 0;
+}
+```
+
+To determine whether a given file represents a keyboard device we
+need to check whether it produces key events and then check whether it has the
+keys that we need for our game, namely `ESC`, `W`, `A`, `S`, and `D`. Checking
+such properties requires passing an array of bytes as the `arg` output
+parameter to an `ioctl` syscall, and then testing whether which bits in the
+array have been set.
+
+The `test_bit` helper function takes an array of bytes and a bit index,
+returning `1` if the given bit is set in the provided array, and
+`0` otherwise.
+
+Next we will write the `open_keyboards` function to acquire sole access to all
+available input devices that could be the user’s keyboard. We will use the
+`getdents` system call to iterate over all of the files in
+`/dev/input`.
+
+```c
+enum syscall {
+    // ...
+    SYS_GETDENTS = 78,
+    // ...
+};
+```
+```c
+struct dirent {
+    u64 ino;
+    u64 off;
+    u16 reclen;
+    char name[];
+};
+
+static i64 getdents(i32 fd, struct dirent *dents, i64 dents_size) {
+    u64 return_value = syscall3(
+        SYS_GETDENTS,
+        (u64)fd,
+        (u64)dents,
+        (u64)dents_size
+    );
+    i32 error = syscall_error(return_value);
+    if (error != 0) {
+        return -error;
+    }
+    return (i64)return_value;
+}
+```
+
+The `getdents` system call writes a `struct dirent` object into the
+provided block of memory for each file in the given directory. The system call is designed
+to be called repeatedly until a value of zero is returned indicating that all directory
+entries have been read. A `struct dirent` object contains an
+[inode number](https://en.wikipedia.org/wiki/Inode),
+a filesystem specific offset value, the total size of the dirent object, and a null terminated string
+for the filename.
+
+```c
+static i32 open_keyboards(
+    struct arena temp_arena,
+    i32 *keyboards,
+    i32 keyboards_capacity
+) {
+    char input_dir[] = "/dev/input";
+    i32 input_dir_fd = open(input_dir, O_RDONLY, 0);
+    if (input_dir_fd < 0) {
+        return -1;
+    }
+
+    void *dents = alloc(&temp_arena, 1024);
+    char path_buffer[sizeof(input_dir) + 1024];
+    for (i32 i = 0; i < sizeof(input_dir); ++i) {
+        path_buffer[i] = input_dir[i];
+    }
+    path_buffer[sizeof(input_dir) - 1] = '/';
+    char *name_buffer = &path_buffer[sizeof(input_dir)];
+
+    i64 dents_pos = 0;
+    i64 dents_len = 0;
+    i32 keyboards_len = 0;
+    while (keyboards_len < keyboards_capacity) {
+        if (dents_pos >= dents_len) {
+            dents_len = getdents(input_dir_fd, dents, 1024);
+            if (dents_len <= 0) {
+                break;
+            }
+        }
+
+        struct dirent *dent = (void *)((char *)dents + dents_pos);
+        i32 dent_name_len = dent->reclen - (dent->name - (char *)dent);
+        for (i32 i = 0; i < den_name_len; ++i) {
+            name_buffer[i] = dent->name[i];
+        }
+        dents_pos += dent->reclen;
+
+        i32 keyboard_fd = open(path_buffer, O_RDONLY, 0);
+        if (keyboard_fd >= 0 & !is_keyboard(keyboard_fd)) {
+            close(keyboard_fd);
+            continue;
+        }
+
+        i32 error = ioctl(
+            keyboard_fd,
+            IOCTL_WRITE,
+            IOCTL_EV,
+            EV_IOCTL_GRAB,
+            sizeof(u32),
+            (char *)1
+        );
+        if (error != 0) {
+            close(keyboard_fd);
+            continue;
+        }
+
+        keyboards[keyboards_len] = keyboard_fd;
+        keyboards_len += 1;
+    }
+
+    close(input_dir_fd);
+    return keyboards_len;
+}
+```
+
+Acquiring a keyboard involves
+making another `ioctl` call, this time indicating that our process wants to take
+sole control over reading input events. Each acquired keyboard file
+descriptor will be written into a caller provided `keyboards` array output
+parameter.
+
+It may seem strange that we use an arena to dynamically allocate
+memory for the fixed size 1024 byte `dirents` buffer. The reason for
+this is subtle and directly related to the effective type issue discussed in
+the <em>making memory</em> section above.
+
+During the `getdents` syscall the operating system will
+write zero or more `struct dirent` entries into the memory pointed to by
+`dents`. Since we don’t a priori know the
+size of each entry (`struct dirent` has a flexible array member) we can’t
+create a stack object with the correct type declared.
+The memory pointed to by the `void *` returned from `alloc` has no
+declared type and there are no writes visible to our translation unit.
+Thus we are free to read the memory via a `struct dirent` pointer.
+
+Now that we have at least one keyboard, we can poll for key
+press events.
+
+```c
+struct input_event {
+    struct timespec time;
+    u16 type;
+    u16 code;
+    i32 value;
+};
+
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_MMAP,
+    MAIN_ERROR_WRITE_STDOUT,
+    MAIN_ERROR_CLOCK_GETTIME,
+    MAIN_ERROR_POLL,
+    MAIN_ERROR_OPEN_KEYBOARD,
+    MAIN_ERROR_READ_KEYBOARD,
+};
+
+i32 main(i32 argc, char **argv) {
+    i64 arena_size = 2000 * 4096;
+    char *mem = mmap(
+        0,
+        arena_size,
+        PROT_WRITE | PROT_READ,
+        MAP_SHARED | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+    if (mem == 0) {
+        return MAIN_ERROR_MMAP;
+    }
+
+    struct arena arena = { .start = mem, .end = mem + arena_size };
+
+    char greeting[] = "Press ESC exit.\n";
+    i64 len = write(STDOUT, greeting, sizeof(greeting) - 1);
+    if (len < 0) {
+        return MAIN_ERROR_WRITE_STDOUT;
+    }
+
+    struct timespec last, now;
+    i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
+    if (error) {
+        return MAIN_ERROR_CLOCK_GETTIME;
+    }
+
+    i32 keyboards[32];
+    i32 keyboards_len = open_keyboards(
+        arena,
+        keyboards,
+        sizeof(keyboards) / sizeof(*keyboards)
+    );
+    if (keyboards_len <= 0) {
+        return MAIN_ERROR_OPEN_KEYBOARD;
+    }
+
+    struct input_event keyboard_events[32];
+    struct pollfd keyboard_pollfds[32];
+    for (i32 i = 0; i < keyboards_len; ++i) {
+        keyboard_pollfds[i].fd = keyboards[i];
+        keyboard_pollfds[i].events = POLLIN;
+    }
+
+    while (1) {
+        i64 events = poll(keyboard_pollfds, keyboards_len, 0);
+        if (events < 0) {
+            return MAIN_ERROR_POLL;
+        }
+
+        for (i32 i = 0; i < keyboards_len; ++i) {
+            if (keyboard_pollfds[i].revents == 0) {
+                continue;
+            }
+            i32 keyboard_fd = keyboard_pollfds[i].fd;
+
+            i64 len = read(
+                keyboard_fd,
+                (char *)keyboard_events,
+                sizeof(keyboard_events)
+            );
+            if (len < 0) {
+                return MAIN_ERROR_READ_KEYBOARD;
+            }
+
+            for (i32 i = 0; i < len / (i64)sizeof(*keyboard_events); ++i) {
+                struct input_event *keyboard_event = &keyboard_events[i];
+                if (keyboard_event->type == 1 & keyboard_event->value == 1) {
+                    switch (keyboard_event->code) {
+                        case KEY_ESC:
+                            return MAIN_ERROR_NONE;
+                        default:
+                            continue;
+                    }
+                }
+            }
+        }
+
+        i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+
+        if (time_since_ns(&now, &last) >= 1000L * 1000L * 1000L) {
+            last = now;
+
+            len = write(STDOUT, ".", 1);
+            if (len < 0) {
+                return MAIN_ERROR_WRITE_STDOUT;
+            }
+        }
+    }
+
+    return MAIN_ERROR_NONE;
+}
+```
+
+Our program will now print a dot every second until the user presses the `ESC`
+key. Note that this program needs to have permissions to open and acqure
+keyboard devices from `/dev/input`, so non-root users will likely need to
+run with `sudo ./dumb_cycle`.
+					
+## Testing graphics: a basic Linux virtual machine
+
+The DumbCycle game will run directly on the Linux Direct Rendering
+Manager (DRM) driver and take over an entire screen along with the system
+keyboard. Because of this, it is not desirable (or generally possible) to
+test the game on a system that is already running a traditional X11 or
+Wayland window manager.
+
+Luckliy, building a bare-bones Linux system and running it
+in a [QEMU](https://www.qemu.org/) virtual machine is fairly simple to acomplish.
+Testing the game on such a basic system
+will also help to ensure that the game only depends on the
+Linux kernel and the corresponding drivers.
+
+In order to boot a Linux system to run our game we need a kernel and a method
+to set up `/dev/` with at least `/dev/dri/` and `/dev/input/`.
+If we want to do any sort of debugging, even “printf debugging,” we will also
+need a shell and some command line utilites.
+
+I have [precompiled binaries](<$link.asset("vm.tar.gz")>) available for the
+[linux kernel](https://github.com/torvalds/linux) and
+[toybox](https://github.com/landley/toybox), but
+[source is available](<$link.asset("vm_src.tar.gz")>) to build each from scratch.
+We’ll add the following rule to our `Makefile` to download and extract the `vm`
+directory.
+
+```make
+vm:
+	curl -o https://musing.permutationlock/dumb_cycle/vm.tar.gz
+	tar -xvf vm.tar.gz
+```
+
+After running `make vm` you should have a `vm` directory containing a kernel
+and an inital RAM filesystem. The filesystem
+contains a `/bin` directory set up with toybox and an `init` script to
+mount the `/dev`, `/proc`, and `/sys`
+directories and run `dumb_cycle` in a `/bin/sh` shell.
+
+We will add a `make test` directive to our `Makefile`
+that builds the game binary, copies it into the VM’s
+filesystem, and runs it in the VM.
+
+```make
+test: dumb_cycle vm
+	cp dumb_cycle vm/fs/bin/dumb_cycle
+	cd vm; ./mkinitfs.sh
+	qemu-system-x86_64 -kernel vm/vmlinuz -initrd vm/initramfs -accel kvm \
+		-no-reboot
+```
+
+## The long road to pixels: connectors, encoders, and CRTCs
+
+With a runtime entry point, file input and output, memory allocation, `ioctl`
+requests, keyboard input, and a virtual machine test environment, we are
+finally ready to look at drawing to the screen.
+
+In order to draw to the screen on a modern Linux system we will need to use the
+Direct Rendering Manager (DRM) subsystem, specifically Kernel Mode Setting
+(KMS).
+The standard user space library for interacting with the DRM is
+[libdrm](https://gitlab.freedesktop.org/mesa/drm).
+The code that we will implement in this section was designed
+using the `libdrm` C source code as an API reference.
+
+Drawing a picture to the screen requires a DRM object called a CRTC,
+a legacy acronym for Cathode-Ray Tube Controller. A CRTC connects a buffer
+of pixel data to a display. To get a CRTC working we’ll need to open a video
+card (generally found in `/dev/dri/`), find a connector for the card, find
+an encoder for the connector, and finally retrieve a CRTC for
+the encoder.
+
+The first step is to get the available resources for our
+video card. We will use `/dev/dri/card0` since this will be the correct
+card to use for the majority of systems.
+
+```c
+enum ioctl_type {
+    IOCTL_EV = (i32)'E',
+    IOCTL_DRM = (i32)'d',
+};
+```
+```c
+enum drm_ioctl {
+    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+};
+
+struct drm_mode_resources {
+    u32 *fbs;
+    u32 *crtcs;
+    u32 *connectors;
+    u32 *encoders;
+
+    u32 fbs_len;
+    u32 crtcs_len;
+    u32 connectors_len;
+    u32 encoders_len;
+
+    u32 min_width;
+    u32 max_width;
+    u32 min_height;
+    u32 max_height;
+};
+
+static struct drm_mode_resources *drm_mode_get_resources(
+    struct arena *arena,
+    i32 fd
+) {
+    struct drm_mode_resources prev_res;
+    struct drm_mode_resources *res;
+    struct arena temp_arena;
+    i32 error;
+
+    do {
+        temp_arena = *arena;
+        res = alloc(&temp_arena, sizeof(*res));
+        if (res == 0) {
+            return 0;
+        }
+        error = ioctl(
+            fd,
+            IOCTL_RDWR,
+            IOCTL_DRM,
+            DRM_IOCTL_MODE_GET_RESOURCES,
+            sizeof(*res),
+            (char *)res
+        );
+        if (error != 0) {
+            return 0;
+        }
+
+        prev_res = *res;
+
+        if (res->fbs_len > 0) {
+            res->fbs = alloc(&temp_arena, res->fbs_len * sizeof(*res->fbs));
+            if (res->fbs == 0) {
+                return 0;
+            }
+        }
+        if (res->crtcs_len > 0) {
+            res->crtcs = alloc(
+                &temp_arena,
+                res->crtcs_len * sizeof(*res->crtcs)
+            );
+            if (res->crtcs == 0) {
+                return 0;
+            }
+        }
+        if (res->connectors_len > 0) {
+            res->connectors = alloc(
+                &temp_arena,
+                res->connectors_len * sizeof(*res->connectors)
+            );
+            if (res->connectors == 0) {
+                return 0;
+            }
+        }
+        if (res->encoders_len > 0) {
+            res->encoders = alloc(
+                &temp_arena,
+                res->encoders_len * sizeof(*res->encoders)
+            );
+            if (res->encoders == 0) {
+                return 0;
+            }
+        }
+
+        error = ioctl(
+            fd,
+            IOCTL_RDWR,
+            IOCTL_DRM,
+            DRM_IOCTL_MODE_GET_RESOURCES,
+            sizeof(*res),
+            (char *)res
+        );
+        if (error != 0) {
+            return 0;
+        }
+    } while (
+        prev_res.fbs_len < res->fbs_len ||
+        prev_res.crtcs_len < res->crtcs_len ||
+        prev_res.connectors_len < res->connectors_len ||
+        prev_res.encoders_len < res->encoders_len
+    );
+
+    *arena = temp_arena;
+    return res;
+}
+```
+```c
+enum main_error {
+    MAIN_ERROR_NONE = 0,
+    MAIN_ERROR_MMAP,
+    MAIN_ERROR_OPEN_CARD0,
+    MAIN_ERROR_DRM_GET_RESOURCES,
+};
+
+i32 main(i32 argc, char **argv) {
+    i64 arena_size = 2000 * 4096;
+    char *mem = mmap(
+        0,
+        arena_size,
+        PROT_WRITE | PROT_READ,
+        MAP_SHARED | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+    if (mem == 0) {
+        return MAIN_ERROR_MMAP;
+    }
+
+    struct arena arena = { .start = mem, .end = mem + arena_size };
+
+    i32 card_fd = open("/dev/dri/card0", O_RDWR, 0);
+    if (card_fd < 0) {
+        return MAIN_ERROR_OPEN_CARD0;
+    }
+
+    struct drm_mode_resources *res = drm_mode_get_resources(&arena, card_fd);
+    if (res == 0) {
+        return MAIN_ERROR_DRM_GET_RESOURCES;
+    }
+
+    return MAIN_ERROR_NONE;
+}
+```
+
+To get the card resources we first need to allocate arrays to store ids for
+frame buffers, crtcs, connectors, and encoders. We make an initial `ioctl`
+call to discover the size of each array,
+then we allocate each array. Finally, we make a second `ioctl` call to populate the arrays with data.
+
+Unfortunately, it may be the case that the array sizes changed between the two
+`ioctl` calls such that they no longer
+fit in the space we allocated. In this case the OS will not have populated the
+arrays, but instead will have simply modified the length entries.
+We'll have to discard the allocated memory and start again if this happens.
+Only once the second `ioctl`
+call has successfully populated the arrays do we commit the memory allocations
+by setting the permanent `arena` equal to our `temp_arena`.
+
+With our video card resources successfully retrieved, we need to find a
+valid connector.
+
+```c
+enum drm_ioctl {
+    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
+};
+```
+```c
+enum drm_mode {
+    DRM_MODE_CONNECTED = 1,
+};
+
+struct drm_mode_modeinfo {
+    u32 clock;
+
+    u16 hdisplay;
+    u16 hsync_start;
+    u16 hsync_end;
+    u16 htotal;
+    u16 hskew;
+
+    u16 vdisplay;
+    u16 vsync_start;
+    u16 vsync_end;
+    u16 vtotal;
+    u16 vscan;
+
+    u32 vrefresh;
+
+    u32 flags;
+    u32 type;
+    char name[32];
+};
+
+struct drm_mode_connector {
+    u32 *encoders;
+    struct drm_mode_modeinfo *modes;
+    u32 *props;
+    u64 *prop_values;
+
+    u32 modes_len;
+    u32 props_len;
+    u32 encoders_len;
+
+    u32 encoder_id;
+    u32 connector_id;
+
+    u32 connector_type;
+    u32 connector_type_id;
+    u32 connection;
+    u32 mm_width;
+    u32 mm_height;
+    u32 subpixel;
+    u32 pad;
+};
+
+static struct drm_mode_connector *drm_mode_get_connector(
+    struct arena *arena,
+    i32 fd,
+    u32 connector_id
+) {
+    struct drm_mode_connector prev_conn;
+    struct drm_mode_connector *conn;
+    struct arena temp_arena;
+    i32 error;
+
+    do {
+        temp_arena = *arena;
+        conn = alloc(&temp_arena, sizeof(*conn));
+        if (conn == 0) {
+            return 0;
+        }
+        conn->connector_id = connector_id;
+        error = ioctl(
+            fd,
+            IOCTL_RDWR,
+            IOCTL_DRM,
+            DRM_IOCTL_MODE_GET_CONNECTOR,
+            sizeof(*conn),
+            (char *)conn
+        );
+        if (error != 0) {
+            return 0;
+        }
+
+        prev_conn = *conn;
+
+        if (conn->props_len > 0) {
+            conn->props = alloc(
+                &temp_arena,
+                conn->props_len * sizeof(*conn->props)
+            );
+            conn->prop_values = alloc(
+                &temp_arena,
+                conn->props_len * sizeof(*conn->prop_values)
+            );
+            if (conn->props == 0 || conn->prop_values == 0) {
+                return 0;
+            }
+        }
+        if (conn->modes_len > 0) {
+            conn->modes = alloc(
+                &temp_arena,
+                conn->modes_len * sizeof(*conn->modes)
+            );
+            if (conn->modes == 0) {
+                return 0;
+            }
+        }
+        if (conn->encoders_len > 0) {
+            conn->encoders = alloc(
+                &temp_arena,
+                conn->encoders_len * sizeof(*conn->encoders)
+            );
+            if (conn->encoders == 0) {
+                return 0;
+            }
+        }
+
+        error = ioctl(
+            fd,
+            IOCTL_RDWR,
+            IOCTL_DRM,
+            DRM_IOCTL_MODE_GET_CONNECTOR,
+            sizeof(*conn),
+            (char *)conn
+        );
+        if (error != 0) {
+            return 0;
+        }
+    } while (
+        prev_conn.props_len < conn->props_len ||
+        prev_conn.modes_len < conn->modes_len ||
+        prev_conn.encoders_len < conn->encoders_len
+    );
+
+    *arena = temp_arena;
+    return conn;
+}
+```
+
+The `drm_mode_get_connector` function works in an almost identical way to
+`drm_mode_get_resources`.
+
+To find a connector to draw to we’ll need to loop over the available
+connectors until we hit one that is connected and has at least one valid
+display mode.
+
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_DRM_FIND_CONNECTOR,
+};
+```
+```c
+    u32 conn_index;
+    struct drm_mode_connector *conn = 0;
+    for (conn_index = 0; conn_index < res->connectors_len; ++conn_index) {
+        conn = drm_mode_get_connector(
+            &arena,
+            card_fd,
+            res->connectors[conn_index]
+        );
+        if (conn == 0) {
+            continue;
+        }
+        if (conn->connection == DRM_MODE_CONNECTED & conn->modes_len != 0) {
+            break;
+        }
+    }
+    if (conn_index == res->connectors_len || conn == 0) {
+        return MAIN_ERROR_DRM_FIND_CONNECTOR;
+    }
+	```
+                        We can retreive an encoder in a similar manner.
+						
+```c
+enum drm_ioctl {
+    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
+    DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
+};
+```
+```c
+struct drm_mode_encoder {
+    u32 encoder_id;
+    u32 encoder_type;
+
+    u32 crtc_id;
+
+    u32 possible_crtcs;
+    u32 possible_clones;
+};
+
+static struct drm_mode_encoder *drm_mode_get_encoder(
+    struct arena *arena,
+    i32 fd,
+    u32 encoder_id
+) {
+    struct arena temp_arena = *arena;
+    struct drm_mode_encoder *enc = 0;
+
+    enc = alloc(&temp_arena, sizeof(*enc));
+    if (enc == 0) {
+        return 0;
+    }
+
+    enc->encoder_id = encoder_id;
+    i32 error = ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_GET_ENCODER,
+        sizeof(*enc),
+        (char *)enc
+    );
+    if (error != 0) {
+        return 0;
+    }
+
+    *arena = temp_arena;
+    return enc;
+}
+```
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_DRM_GET_ENCODER,
+};
+```
+```c
+    struct drm_mode_encoder *enc = drm_mode_get_encoder(
+        &arena,
+        card_fd,
+        conn->encoder_id
+    );
+    if (enc == 0) {
+        return MAIN_ERROR_DRM_GET_ENCODER;
+    }
+```
+
+In order to draw pixels to the screen we will be creating a “dumb
+buffer” that contains an array of 32 bit pixels sized according to the
+resolution of the display mode.
+
+Dumb buffers are so named because they ask the driver to naively copy pixel
+data from CPU memory to the display and do not take
+advantage of graphics acceleration hardware. Drawing to the screen with GPU
+hardware requires specific `ioctl` APIs that differ significantly depending on
+the type of graphics card used. Such GPU APIs involve a lot more work to set
+up than the simple pixel arrays that we will use.
+
+```c
+enum drm_ioctl {
+    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
+    DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
+    DRM_IOCTL_MODE_ADD_FB = 0xae,
+    DRM_IOCTL_MODE_CREATE_DUMB = 0xb2,
+    DRM_IOCTL_MODE_MAP_DUMB = 0xb3,
+};
+```
+```c
+struct drm_mode_create_dumb {
+    u32 height;
+    u32 width;
+    u32 bpp;
+    u32 flags;
+    u32 handle;
+    u32 pitch;
+    u64 size;
+};
+
+struct drm_mode_map_dumb {
+    u32 handle;
+    u32 pad;
+    i64 offset;
+};
+
+struct drm_mode_fb_cmd {
+    u32 fb_id;
+    u32 width;
+    u32 height;
+    u32 pitch;
+    u32 bpp;
+    u32 depth;
+    u32 handle;
+};
+
+struct drm_mode_dumb_buffer {
+    u32 width;
+    u32 height;
+    u32 stride;
+    u32 handle;
+    u32 fb_id;
+    u32 *map;
+    u64 size;
+};
+
+static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
+    struct arena *arena,
+    i32 fd,
+    u32 width,
+    u32 height
+) {
+    struct drm_mode_create_dumb creq = {
+        .width = width,
+        .height = height,
+        .bpp = 32,
+    };
+    i32 error = ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_CREATE_DUMB,
+        sizeof(creq),
+        (char *)&creq
+    );
+    if (error != 0) {
+        return 0;
+    }
+
+    struct drm_mode_fb_cmd fb_cmd = {
+        .width = width,
+        .height = height,
+        .pitch = creq.pitch,
+        .bpp = 32,
+        .depth = 24,
+        .handle = creq.handle,
+    };
+    error = ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_ADD_FB,
+        sizeof(fb_cmd),
+        (char *)&fb_cmd
+    );
+    if (error != 0) {
+        return 0;
+    }
+
+    struct drm_mode_map_dumb mreq = { .handle = creq.handle };
+    error = ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_MAP_DUMB,
+        sizeof(mreq),
+        (char *)&mreq
+    );
+    if (error != 0) {
+        return 0;
+    }
+
+    u32 *mem = mmap(
+        0,
+        (i64)creq.size,
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        fd,
+        mreq.offset
+    );
+    if (mem == 0) {
+        return 0;
+    }
+
+    struct drm_mode_dumb_buffer *buf = alloc(arena, sizeof(*buf));
+    buf->width = width;
+    buf->height = height;
+    buf->stride = creq.pitch / sizeof(u32);
+    buf->size = creq.size / sizeof(u32);
+    buf->handle = creq.handle;
+    buf->map = mem;
+    buf->fb_id = fb_cmd.fb_id;
+
+    for (u64 i = 0; i < buf->size; ++i) {
+        buf->map[i] = 0;
+    }
+
+    return buf;
+}
+```
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_DRM_CREATE_DUMB_BUFFER,
+};
+```
+```c
+    struct drm_mode_dumb_buffer *buf = drm_mode_create_dumb_buffer(
+        &arena,
+        card_fd,
+        conn->modes[0].hdisplay,
+        conn->modes[0].vdisplay
+    );
+    if (buf == 0) {
+        return MAIN_ERROR_DRM_CREATE_DUMB_BUFFER;
+    }
+```
+
+The last step before we can see pixels on the
+screen is to get a CRTC and attach the dumb frame buffer that we just created.
+
+```c
+enum drm_ioctl {
+    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
+    DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
+    DRM_IOCTL_MODE_ADD_FB = 0xae,
+    DRM_IOCTL_MODE_CREATE_DUMB = 0xb2,
+    DRM_IOCTL_MODE_MAP_DUMB = 0xb3,
+    DRM_IOCTL_MODE_GET_CRTC = 0xa1,
+    DRM_IOCTL_MODE_SET_CRTC = 0xa2,
+};
+```
+```c
+struct drm_mode_crtc {
+    u32 *set_connectors;
+    u32 connectors_len;
+
+    u32 crtc_id;
+    u32 fb_id;
+
+    u32 x;
+    u32 y;
+
+    u32 gamma_size;
+    u32 mode_valid;
+    struct drm_mode_modeinfo mode;
+};
+
+static struct drm_mode_crtc *drm_mode_get_crtc(
+    struct arena *arena,
+    i32 fd,
+    u32 crtc_id
+) {
+    struct arena temp_arena = *arena;
+    struct drm_mode_crtc *crtc = 0;
+
+    crtc = alloc(&temp_arena, sizeof(*crtc));
+    if (crtc == 0) {
+        return 0;
+    }
+
+    crtc->crtc_id = crtc_id;
+    i32 error = ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_GET_CRTC,
+        sizeof(*crtc),
+        (char *)crtc
+    );
+    if (error != 0) {
+        return 0;
+    }
+
+    *arena = temp_arena;
+    return crtc;
+}
+
+static i32 drm_mode_set_crtc(
+    i32 fd,
+    struct drm_mode_crtc *crtc,
+    u32 *connectors,
+    u32 connectors_len,
+    u32 fb_id
+) {
+    crtc->set_connectors = connectors;
+    crtc->connectors_len = connectors_len;
+    crtc->fb_id = fb_id;
+    return ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_SET_CRTC,
+        sizeof(*crtc),
+        (char *)crtc
+    );
+}
+```
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_DRM_GET_CRTC,
+    MAIN_ERROR_DRM_SET_CRTC,
+};
+```
+```c
+    struct drm_mode_crtc *crtc = drm_mode_get_crtc(
+        &arena,
+        card_fd,
+        enc->crtc_id
+    );
+    if (crtc == 0) {
+        return MAIN_ERROR_DRM_GET_CRTC;
+    }
+
+    crtc->mode = conn->modes[0];
+
+    i32 error = drm_mode_set_crtc(
+        card_fd,
+        crtc,
+        &conn->connector_id,
+        1,
+        buf->fb_id
+    );
+    if (error != 0) {
+        return MAIN_ERROR_DRM_SET_CRTC;
+    }
+```
+
+Finally, we can add our keyboard event loop back in and insert code to write
+color values to the dumb buffer pixels.
+
+```c
+    struct timespec last, now;
+    error = clock_gettime(CLOCK_MONOTONIC, &last);
+    if (error) {
+        return MAIN_ERROR_CLOCK_GETTIME;
+    }
+
+    i32 keyboards[32];
+    i32 keyboards_len = open_keyboards(
+        arena,
+        keyboards,
+        sizeof(keyboards) / sizeof(*keyboards)
+    );
+    if (keyboards_len <= 0) {
+        return MAIN_ERROR_OPEN_KEYBOARD;
+    }
+
+    struct input_event keyboard_events[32];
+    struct pollfd keyboard_pollfds[32];
+    for (i32 i = 0; i < keyboards_len; ++i) {
+        keyboard_pollfds[i].fd = keyboards[i];
+        keyboard_pollfds[i].events = POLLIN;
+    }
+
+    u32 color = 0;
+    while (1) {
+        i64 events = poll(keyboard_pollfds, keyboards_len, 0);
+        if (events < 0) {
+            return MAIN_ERROR_POLL;
+        }
+
+        for (i32 i = 0; i < keyboards_len; ++i) {
+            if (keyboard_pollfds[i].revents == 0) {
+                continue;
+            }
+            i32 keyboard_fd = keyboard_pollfds[i].fd;
+
+            i64 len = read(
+                keyboard_fd,
+                (char *)keyboard_events,
+                sizeof(keyboard_events)
+            );
+            if (len < 0) {
+                return MAIN_ERROR_READ_KEYBOARD;
+            }
+
+            for (i32 i = 0; i < len / (i64)sizeof(*keyboard_events); ++i) {
+                struct input_event *keyboard_event = &keyboard_events[i];
+                if (keyboard_event->type == 1 & keyboard_event->value == 1) {
+                    switch (keyboard_event->code) {
+                        case KEY_ESC:
+                            return MAIN_ERROR_NONE;
+                        default:
+                            continue;
+                    }
+                }
+            }
+        }
+
+        i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+
+        if (time_since_ns(&now, &last) >= 100L * 1000L * 1000L) {
+            last = now;
+
+            color += 5;
+            for (u32 i = 0; i < buf->size; ++i) {
+                buf->map[i] = color;
+            }
+        }
+    }
+```
+
+The program should fill the screen with a color that slowly changes from
+black to blue and exits when the user presses `ESC`.
+
+## Gaming at last: drawing the game state
+
+We are going to create a game that loosely resembles Snake or the LightCycle
+game from Tron. The player will constantly be
+moving in one of the four cardinal directions, leaving a trail behind them. If
+they ever hit the trail or if they hit the edge of the screen, then the game is
+over. The direction of movement can be controlled by pressing the `W`, `A`,
+`S`, `D` keys. As with all of the programs above, the game will exit if the user
+presses `ESC`.
+
+We don’t know the resolution of the screen that our game will run on, so we will
+use a 90x90 grid of squares for internal game logic. Each grid square will store
+`0` to indicate that it is empty or `1` to indicate that the player has left a
+trail there.
+
+The game state will update `30` times per second and on each update the player
+will move `1` square in the direction of their current velocity. The game will
+also render to the screen each update. The maximum integer multiple of a 90x90
+grid that fits inside the screen resolution will be computed and then a scaled
+version of the game board will be drawn into the dumb buffer memory.
+
+```c
+enum color {
+    COLOR_BLUE = 0x0000ff,
+    COLOR_GRAY = 0xededed
+};
+
+struct game_state {
+    i32 x;
+    i32 y;
+    i32 vx;
+    i32 vy;
+    i32 dead;
+    char board[90 * 90];
+};
+
+static void update_game(struct game_state *state) {
+    state->board[state->y * 90 + state->x] = 1;
+    state->y += state->vy;
+    state->x += state->vx;
+
+    if (
+        state->board[state->y * 90 + state->x] != 0 ||
+        state->x == 89 ||
+        state->x == 0 ||
+        state->y == 89 ||
+        state->y == 0
+    ) {
+        state->dead = 1;
+    }
+
+    state->board[state->y * 90 + state->x] = 1;
+}
+
+static void draw_game(
+    struct drm_mode_dumb_buffer *buf,
+    struct game_state *state,
+    u32 x,
+    u32 y,
+    u32 scale
+) {
+    for (u32 i = 0; i < 90; ++i) {
+        for (u32 yoff = 0; yoff < scale; ++yoff) {
+            u32 cy = cy = y + i * scale + yoff;
+            for (u32 j = 0; j < 90; ++j) {
+                for (u32 xoff = 0; xoff < scale; ++xoff) {
+                    u32 cx = x + j * scale + xoff;
+                    u32 pixel_index = cy * buf->stride + cx;
+                    if (state->board[i * 90 + j] == 0) {
+                        buf->map[pixel_index] = (u32)COLOR_GRAY;
+                    } else {
+                        buf->map[pixel_index] = (u32)COLOR_BLUE;
+                    }
+                }
+            }
+        }
+    }
+}
+```
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_OPEN_KEYBOARD,
+    MAIN_ERROR_READ_KEYBOARD,
+    MAIN_ERROR_CLOCK_GETTIME,
+    MAIN_ERROR_POLL,
+};
+```
+```c
+    u32 square_len = (buf->height > buf->width) ? buf->width : buf->height;
+    u32 scale = square_len / 90;
+    u32 board_size = square_len - (square_len % 90);
+    u32 board_x = (buf->width / 2) - (board_size / 2);
+    u32 board_y = (buf->height / 2) - (board_size / 2);
+
+    struct game_state game_state;
+    clear_game(&game_state);
+
+    while (1) {
+        poll(keyboard_pollfds, keyboards_len, 0);
+        for (i32 i = 0; i < keyboards_len; ++i) {
+            if (keyboard_pollfds[i].revents == 0) {
+                continue;
+            }
+
+            i32 keyboard_fd = keyboard_pollfds[i].fd;
+
+            i64 len = read(
+                keyboard_fd,
+                (char *)keyboard_events,
+                sizeof(keyboard_events)
+            );
+            if (len < 0) {
+                return MAIN_ERROR_READ_KEYBOARD;
+            }
+
+            for (i32 j = 0; j < len / (i64)sizeof(*keyboard_events); ++j) {
+                struct input_event *keyboard_event = &keyboard_events[j];
+                if (keyboard_event->type != 1 || keyboard_event->value != 1) {
+                    continue;
+                }
+
+                switch (keyboard_event->code) {
+                    case KEY_ESC:
+                        return MAIN_ERROR_NONE;
+                    case KEY_A:
+                        if (game_state.vx <= 0) {
+                            game_state.vx = -1;
+                            game_state.vy = 0;
+                        }
+                        break;
+                    case KEY_D:
+                        if (game_state.vx >= 0) {
+                            game_state.vx = 1;
+                            game_state.vy = 0;
+                        }
+                        break;
+                    case KEY_W:
+                        if (game_state.vy <= 0) {
+                            game_state.vx = 0;
+                            game_state.vy = -1;
+                        }
+                        break;
+                    case KEY_S:
+                        if (game_state.vy >= 0) {
+                            game_state.vx = 0;
+                            game_state.vy = 1;
+                        }
+                        break;
+                    default:
+                        continue;
+                }
+            }
+        }
+
+        error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error !=0) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+
+        if (time_since_ns(&now, &last) > 33L * 1000L * 1000L) {
+            last = now;
+            update_game(&game_state);
+            draw_game(buf, &game_state, board_x, board_y, scale);
+
+            if (game_state.dead) {
+                clear_game(&game_state);
+            }
+        }
+    }
+```
+
+Enjoy DumbCycling!
+
+## Avoiding partial updates: vsync and double buffering
+
+While playing the game, you may have noticed some
+flickering at the head of the trail and occasional jumps
+in position. The jumpiness is called "judder" and it's
+caused by the fact that our game is drawing discrete
+chunks of pixels updated once ever 33 milliseconds, and
+this timing will not always line up with the actual
+monitor framerate.
+
+In this section we will make our game updates
+somewhat "framerate independent," add vsync to draw the
+game once per frame according to the monitor refresh
+rate, and add double buffering to write the current game
+state into a buffer of pixels that is not currently
+being displayed.
+
+
+Let us first write a function to submit a page
+flip (pixel buffer swap) to be performed on the next
+monitor refresh, and a function to detect when a page
+flip occurs.
+
+```c
+enum drm_ioctl {
+    // ...
+    DRM_IOCTL_MODE_PAGE_FLIP = 0xb0,
+};
+```
+```c
+struct drm_mode_crtc_page_flip {
+    u32 crtc_id;
+    u32 fb_id;
+    u32 flags;
+    u32 reserved;
+    void *user_data;
+};
+
+enum drm_mode_page_flip {
+    DRM_MODE_PAGE_FLIP_EVENT = 1,
+};
+
+static i32 drm_mode_crtc_page_flip(
+    i32 fd,
+    u32 crtc_id,
+    u32 fb_id
+) {
+    struct drm_mode_crtc_page_flip flip = {
+        .crtc_id = crtc_id,
+        .fb_id = fb_id,
+        .flags = DRM_MODE_PAGE_FLIP_EVENT,
+        .user_data = (void *)0,
+    };
+
+    return ioctl(
+        fd,
+        IOCTL_RDWR,
+        IOCTL_DRM,
+        DRM_IOCTL_MODE_PAGE_FLIP,
+        sizeof(flip),
+        (char *)&flip
+    );
+}
+
+struct drm_event {
+    u32 type;
+    u32 length;
+};
+
+enum drm_event_type {
+    DRM_EVENT_TYPE_FLIP_COMPLETE = 2,
+};
+
+static i32 drm_mode_handle_events(i32 fd, struct arena temp_arena) {
+    i32 flip_complete = 0;
+
+    char *buffer = alloc(&temp_arena, 4096);
+    i64 len = read(fd, buffer, 4096);
+    if (len < 0) {
+        return (i32)len;
+    }
+
+    i64 i = 0;
+    while (i < len) {
+        struct drm_event *e = (struct drm_event *)(buffer + i);
+        if (e->type == DRM_EVENT_TYPE_FLIP_COMPLETE) {
+            flip_complete = 1;
+        }
+        i += e->length;
+    }
+
+    return flip_complete;
+}
+
+```
+```c
+enum main_error {
+    // ...
+    MAIN_ERROR_DRM_HANDLE_EVENTS,
+    MAIN_ERROR_DRM_PAGE_FLIP,
+    // ...
+};
+```
+
+Next we simply need to create a second dumb frame
+buffer, submit an initial page swap, and then
+re-draw and swap the buffers every time a refresh
+occurs.
+
+We will also track elapsed time to ensure
+one game update happens exactly once every timepstep.
+Moreover, we will have key preses update the velocity
+only after a game update, to avoid jumps in partially
+drawn squares.
+
+```c
+struct game_state {
+    i32 x;
+    i32 y;
+    i32 vx;
+    i32 vy;
+    i32 nvx;
+    i32 nvy;
+    i32 dead;
+    char board[90 * 90];
+};
+
+static void clear_game(struct game_state *state) {
+    state->x = 15;
+    state->y = 45;
+    state->vx = 1;
+    state->vy = 0;
+    state->nvx = state->vx;
+    state->nvy = state->vy;
+    state->dead = 0;
+
+    for (i32 i = 0; i < sizeof(state->board); ++i) {
+        state->board[i] = 0;
+    }
+
+    state->board[state->y * 90 + state->x] = 1;
+}
+
+static void update_game(struct game_state *state) {
+    state->y += state->vy;
+    state->x += state->vx;
+    state->vx = state->nvx;
+    state->vy = state->nvy;
+
+    if (state->board[state->y * 90 + state->x] != 0 || state->x > 89 ||
+        state->x < 0 || state->y > 89 || state->y < 0) {
+        state->dead = 1;
+    } else {
+        state->board[state->y * 90 + state->x] = 1;
+    }
+}
+```
+```c
+static void draw_partial(
+    struct drm_mode_dumb_buffer *buf,
+    struct game_state *state,
+    u32 x,
+    u32 y,
+    u32 scale,
+    u32 partial
+) {
+    if (state->y == 0 && state->vy < 0) {
+        return;
+    }
+    if (state->y == 89 && state->vy > 0) {
+        return;
+    }
+    if (state->x == 0 && state->vx < 0) {
+        return;
+    }
+    if (state->x == 89 && state->vx > 0) {
+        return;
+    }
+    for (u32 yoff = 0; yoff < scale; ++yoff) {
+        if (state->vy > 0 && yoff >= partial) {
+            continue;
+        }
+        if (state->vy < 0 && yoff < scale - partial) {
+            continue;
+        }
+        u32 cy = cy = y + (state->y + state->vy) * scale + yoff;
+        for (u32 xoff = 0; xoff < scale; ++xoff) {
+            if (state->vx > 0 && xoff >= partial) {
+                continue;
+            }
+            if (state->vx < 0 && xoff < scale - partial) {
+                continue;
+            }
+            u32 cx = x + (state->x + state->vx) * scale + xoff;
+            u32 pixel_index = cy * buf->stride + cx;
+            buf->map[pixel_index] = (u32)COLOR_BLUE;
+        }
+    }
+}
+```
+```c
+    u32 buf_index = 0;
+    struct drm_mode_dumb_buffer *bufs[2];
+    bufs[0] = drm_mode_create_dumb_buffer(
+        &arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
+    );
+    bufs[1] = drm_mode_create_dumb_buffer(
+        &arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
+    );
+    if (bufs[0] == 0 || bufs[1] == 0) {
+        return MAIN_ERROR_DRM_CREATE_DUMB_BUFFER;
+    }
+```
+```c
+    i32 error = drm_mode_set_crtc(
+        card_fd,
+        crtc,
+        &conn->connector_id,
+        1,
+        bufs[buf_index]->fb_id
+    );
+    if (error != 0) {
+        return MAIN_ERROR_DRM_SET_CRTC;
+    }
+    buf_index ^= 1;
+
+    error = drm_mode_set_crtc(
+        card_fd,
+        crtc,
+        &conn->connector_id,
+        1,
+        bufs[buf_index]->fb_id
+    );
+    if (error != 0) {
+        return MAIN_ERROR_DRM_SET_CRTC;
+    }
+    buf_index ^= 1;
+
+    error = drm_mode_crtc_page_flip(
+        card_fd,
+        crtc->crtc_id,
+        bufs[buf_index]->fb_id
+    );
+    if (error != 0) {
+        return MAIN_ERROR_DRM_PAGE_FLIP;
+    }
+    buf_index ^= 1;
+```
+```c
+    i64 elapsed = 0;
+    struct timespec last, now;
+    error = clock_gettime(CLOCK_MONOTONIC, &last);
+    if (error) {
+        return MAIN_ERROR_CLOCK_GETTIME;
+    }
+```
+```c
+    struct input_event keyboard_events[32];
+    struct pollfd pollfds[32 + 1];
+    for (i32 i = 0; i < keyboards_len; ++i) {
+        pollfds[i].fd = keyboards[i];
+        pollfds[i].events = POLLIN;
+    }
+    pollfds[keyboards_len].fd = card_fd;
+    pollfds[keyboards_len].events = POLLIN;
+
+    u32 width = bufs[0]->width;
+    u32 height = bufs[0]->height;
+    u32 square_len = (height > width) ? width : height;
+    u32 scale = square_len / 90;
+    u32 board_size = square_len - (square_len % 90);
+    u32 board_x = (width / 2) - (board_size / 2);
+    u32 board_y = (height / 2) - (board_size / 2);
+
+    struct game_state game_state;
+    clear_game(&game_state);
+
+    while (1) {
+        error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error !=0) {
+            return MAIN_ERROR_CLOCK_GETTIME;
+        }
+        elapsed += time_since_ns(&now, &last);
+        last = now;
+
+        poll(pollfds, keyboards_len + 1, 0);
+        for (i32 i = 0; i < keyboards_len; ++i) {
+            if (pollfds[i].revents == 0) {
+                continue;
+            }
+
+            i32 keyboard_fd = pollfds[i].fd;
+
+            i64 len = read(
+                keyboard_fd,
+                (char *)keyboard_events,
+                sizeof(keyboard_events)
+            );
+            if (len < 0) {
+                return MAIN_ERROR_READ_KEYBOARD;
+            }
+
+            for (i32 j = 0; j < len / (i64)sizeof(*keyboard_events); ++j) {
+                struct input_event *keyboard_event = &keyboard_events[j];
+                if (keyboard_event->type != 1 || keyboard_event->value != 1) {
+                    continue;
+                }
+
+                switch (keyboard_event->code) {
+                    case KEY_ESC:
+                        return MAIN_ERROR_NONE;
+                    case KEY_A:
+                        if (game_state.vx <= 0) {
+                            game_state.nvx = -1;
+                            game_state.nvy = 0;
+                        }
+                        break;
+                    case KEY_D:
+                        if (game_state.vx >= 0) {
+                            game_state.nvx = 1;
+                            game_state.nvy = 0;
+                        }
+                        break;
+                    case KEY_W:
+                        if (game_state.vy <= 0) {
+                            game_state.nvx = 0;
+                            game_state.nvy = -1;
+                        }
+                        break;
+                    case KEY_S:
+                        if (game_state.vy >= 0) {
+                            game_state.nvx = 0;
+                            game_state.nvy = 1;
+                        }
+                        break;
+                    default:
+                        continue;
+                }
+            }
+        }
+
+        const i64 timestep = 24L * 1000L * 1000L;
+        while (elapsed >= timestep) {
+            elapsed -= timestep;
+            update_game(&game_state);
+
+            if (game_state.dead) {
+                clear_game(&game_state);
+            }
+        }
+
+        if (pollfds[keyboards_len].revents != 0) {
+            i32 result = drm_mode_handle_events(card_fd, arena);
+            if (result < 0) {
+                return MAIN_ERROR_DRM_HANDLE_EVENTS;
+            }
+            if (result > 0) {
+                draw_game(bufs[buf_index], &game_state, board_x, board_y, scale);
+                draw_partial(
+                    bufs[buf_index],
+                    &game_state,
+                    board_x,
+                    board_y,
+                    scale,
+                    (i32)((elapsed * (i64)scale) / timestep)
+                );
+                error = drm_mode_crtc_page_flip(
+                    card_fd,
+                    crtc->crtc_id,
+                    bufs[buf_index]->fb_id
+                );
+                if (error != 0) {
+                    return MAIN_ERROR_DRM_PAGE_FLIP;
+                }
+                buf_index ^= 1;
+            }
+        }
+    }
+```
+
+Now you can enjoy DumbCycling without judder!
+
+[1]: https://en.wikipedia.org/wiki/Linux_framebuffer
+[2]: https://en.wikipedia.org/wiki/Direct_Rendering_Manager
+[3]: https://github.com/permutationlock/DumbCycle
+
+

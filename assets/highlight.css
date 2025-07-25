@@ -1,0 +1,63 @@
+:root {
+  --light-yellow: #e5c07b;
+  --dark-yellow: #d19a66;
+  --blue: #61afef;
+  --cyan: #56b6c2;
+  --light-red: #e06c75;
+  --dark-red: #be5046;
+  --comment-gray: #5c6370;
+  --magenta: #c678dd;
+}
+
+pre {
+  overflow: auto;
+  max-height: 600px;
+  background-color: #222;
+  padding: 10px 5px;
+}
+
+code.ziggy {
+  color: var(--cyan);
+}
+
+code.ziggy .keyword,
+code.ziggy .type {
+  color: var(--light-yellow);
+}
+
+code.ziggy .string {
+  color: var(--dark-yellow);
+}
+
+code.ziggy .numeric.constant {
+  color: var(--magenta);
+}
+
+code.ziggy .function {
+  color: var(--blue);
+}
+
+code.nasm .label,
+code.nasm .function {
+  color: var(--blue);
+}
+
+code.c .keyword {
+  color: var(--light-yellow);
+}
+
+code.c .type {
+  color: var(--blue);
+}
+
+code.c .number {
+  color: var(--light-red);
+}
+
+code.c .string {
+  color: var(--magenta);
+}
+
+code.c .comment{
+  color: var(--comment-gray);
+}
