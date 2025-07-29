@@ -9,31 +9,34 @@
 },
 ---
 
-> *Is there a simple way to build C Android apps using the command line?*
+> *Is there a simple way to build Android apps using C?*
 
 According
-to the [rawdraw android][1] project, the answer is yes! But, as is the theme of this
-blog, I wanted to take things a bit further and build a minimal example from scratch.
-The goal of this article is to go from zero to OpenGL ES 2.0 context in C on my Pixel 7a
-phone using only the command line and as few Android SDK tools as possible
-(well, "trivially possible," since this could likely be accomplished without using the
-SDK at all).
+to the [rawdraw android][1] project, the answer is yes! But, of course, I want to
+build a minimal example from scratch.
+The goal of this article is to go from zero to [OpenGL ES][13] context on my
+Pixel 7a phone using C and as few Android SDK command line tools as is "easily possible."
+
+**Disclaimer:** I am a curious C programmer, not an Android developer. The last time
+that I opened Android Studio was in University in 2016 when I was working on a probe
+to test snow conditions.
 
 ## Requirements
 
-You will need `zip` and `unzip` create and unpack archives.
-You will also need the Android SDK build tools (`aapt` or `aapt2`, `zipalign`,
-`apksigner`) and
-the Android NDK `clang` toolchain for each target architecture that you wish to
-support. The standard Android SDK and NDK installations will come with all that
-you need, but if you are a minimalist musl libc Linux user like me can use
-[sdk-custom][3] and [ndk-custom][4]. It's also possible to build
-the aformentioned tools from source.
+We will need `zip` and `unzip` to create and unpack `.zip` archives.
+We will also need a few Android SDK tools (`aapt` or `aapt2`,
+`zipalign`, `apksigner`, `adb`) and
+the Android NDK `clang` toolchain. The standard [SDK][15] (command line only)
+and [NDK][16] distributions should come with all that
+we need. Alternatively, [sdk-custom][3] and [ndk-custom][4] provide
+static Linux binaries, which are useful for developing on non-standard Linux
+distributions (e.g. the [musl][17] based [distro][19] I currently use).
 
-In order to install `.apk` files on modern Android devices, they need to be
-signed with a keystore using `apksigner`. A keystore file can be generated using
-the `keytool` command from OpenJDK. It is likely possible to avoid depending
-on OpenJDK, but that is an adventure for another day.
+We'll also need [OpenJDK][14] (I'd love to avoid this,
+but that is an adventure for another day).
+In order to install a `.apk` app on a modern Android device, it must be
+signed with `apksigner`, which depends on `java`.
+Moreover, we will need `keytool` from OpenJDK to generate a keystore file.
 
 ```bash
 $ keytool -genkey -v -keystore mykey.keystore -alias mykey \
@@ -42,8 +45,9 @@ $ keytool -genkey -v -keystore mykey.keystore -alias mykey \
     -dname "CN=example.com, OU=ID, O=Example, L=Callar, S=Morvern, C=GB"
 ```
 
-Finally, you'll need the `android-XX.jar` file for your target Android version,
-which can be acquired through the Android SDK or [downloaded
+Finally, we'll need the `android.jar` file for the target Android SDK version (we
+will target version 35 in this article),
+which can be acquired through the SDK or [downloaded
 separately][5].
 
 ## Packaging an Android APK
@@ -52,20 +56,19 @@ An Android `.apk` file is just a specially structured `.zip` archive.
 The core ingredients are an `AndroidManifest.xml` file,
 a `resources.arsc` file, and (optionally) `res/`, `asset/`, and `lib/` directories
 to store resources, assets, and native libraries, respectively. Note that the
-`AndroidManifest.xml` in the `.apk` is a binary file, not an
+`AndroidManifest.xml` in the `.apk` is a compiled binary, not an
 XML text file.
 
 The general build strategy will be as follows.
- 1. Create a template `temp.apk` file with `aapt` (or `aapt2`) from the Android
-    SDK using an `AndroidManifest.xml` file, an
-    `icon.png` mipmap resource, and the `android-XX.jar` file (`XX` is the
-    target Android version).
- 2. Extract `temp.apk` into `build` and add a `build/lib/` directory.
+ 1. Create a template `temp.apk` file with `aapt` (or `aapt2`)
+    using an `AndroidManifest.xml` text file, an
+    `icon.png` mipmap resource, and the `android.jar` file.
+ 2. Extract `temp.apk` into `build/` and add a `build/lib/` directory.
  3. Compile our C code into a `build/lib/aarch64/libseglapp.so` shared library
-    using the Android NDK `clang` toolchain.
- 4. Re-compress the `build` directory with `zip` into `temp2.apk`.
- 5. Run the Android SDK `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
- 6. Sign `seglapp.apk` with `apksigner` from the Android SDK.
+    using the NDK `clang` toolchain.
+ 4. Re-package the `build` directory into `temp2.apk` with `zip`.
+ 5. Run the `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
+ 6. Sign `seglapp.apk` with `apksigner`.
 
 The inital `temp.apk` will be packaged from the following `template`
 directory.
@@ -77,12 +80,12 @@ directory.
          - mipmap/
              - icon.png
 ```
-An example `template/AndroidManifest.xml` is shown below. Note the
-minimum and target Android versions, as well as the package name
-`org.seglorg` and app name `seglapp`. In a real build these
-should be changed to reflect your application.
+Our example `template/AndroidManifest.xml` is shown below. Note the
+minimum and target SDK version, the package name `org.seglorg`,
+and the app name `seglapp`. In a real project these
+would need to change to reflect the application.
 
-```
+```xml
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <manifest xmlns:tools="http://schemas.android.com/tools"
         xmlns:android="http://schemas.android.com/apk/res/android"
@@ -109,31 +112,33 @@ should be changed to reflect your application.
 </manifest>
 ```
 
-The `template/res/mipmap/icon.png` can be any square `.png` file, e.g. the `2x2`
-square from [rawdraw android][1]. Using `aapt` we may now package our
+The `template/res/mipmap/icon.png` can be any square `.png` file, e.g. the [`2x2`
+square from
+rawdraw android](https://github.com/cnlohr/rawdrawandroid/blob/master/Sources/res/mipmap/icon.png).
+Using `aapt` we may now package our
 initial `.apk`.
 
 ```bash
-$ aapt -v -f  -F ./temp.apk -I ./android-35.jar \
+$ aapt package -v -f  -F ./temp.apk -I ./android.jar \
     -M ./template/AndroidManifest.xml \
     -S ./template/res --target-sdk-version 35
 ```
 
-If you wish to use the newer `aapt2` binary (`aapt` has been deprecated),
-the process is similar but with some extra steps as the `aapt package` command
+To use the newer `aapt2` binary (`aapt` has been deprecated),
+the process is similar, but with some extra steps as the `aapt package` command
 has been split into `aapt2 compile` and `aapt2 link`.
 
 ```bash
 $ mkdir ./template/compiled
 $ aapt2 compile -v ./template/res/mimpmap/icon.png \
     -o ./template/compiled
-$ aapt2 link -v -o ./temp.apk -I ./android-35.jar \
+$ aapt2 link -v -o ./temp.apk -I ./android.jar \
     --manifest ./template/AndroidManifest.xml \
     --target-sdk-version 35 \
     ./template/compiled/mipmap_icon.png.flat
 ```
 
-We can now unpack the `temp.apk` archive into a `build` directory where
+We can now unpack `temp.apk` into a new `build/` directory where
 we will insert our C shared library.
 
 ```bash
@@ -145,25 +150,30 @@ Archive:  ./temp.apk
  extracting: ./build/resources.arsc
 ```
 
-## Building an Android shared library with C
+## Building a native Android library with C
 
 The link between native code (the C shared library we will be building) and the
 Java code that drives all Android applications is provided by the
-Android NDK in `android_native_app_glue.h` and `android_native_app_glue.c`. The glue exports
+Android NDK in
+[`android_native_app_glue.h`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.h)
+and
+[`android_native_app_glue.c`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.c).
+The glue exports
 an `ANativeActivity_onCreate` function that will be called from Java through
-the Java Native Inteface (JNI) on startup. This
+the [Java Native Inteface (JNI)][21] on startup. This
 function sets up a collection of callbacks that allow our C code to  respond
 to events from the main Java thread(s), and then uses `pthread_create` to
 initialize a C main thread and call `android_main`. It is the
-`android_main` function will serve as the C entry point into our application.
+`android_main` function that will serve as the C entry point into our
+application.
 
-We will copy both glue source files into a new `./src` directory
-and start our own `./src/main.c`. To begin, we will setup event and input
+We will copy both glue source files into a new `src` directory
+and start our own `src/main.c`. To begin, we will setup event and input
 handler callbacks and run a main loop that
 polls the native activity.
 
 ```c
-/* ./src/main.c */
+/* src/main.c */
 
 #include <android/log.h>
 #include "android_native_app_glue.h"
@@ -228,12 +238,13 @@ void android_main(struct android_app *app) {
 }
 ```
 
-We can now test building the library, re-packaging the `.apk`,
-and installing it on an Android device.
+We can now build the library and re-package the `.apk`. In this article `clang`
+will always refer to the binary distributed with the Android NDK.
 
 ```bash
-$ mkdir ./build/lib/arm64-v8a
-$ aarch64-linux-android35-clang -Wall -Wextra -Wno-unused-parameter \
+$ mkdir -p ./build/lib/arm64-v8a
+$ clang --target=aarch64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -ldl -landroid -llog
@@ -246,21 +257,28 @@ $ apksigner sign --key-pass pass:mypassword \
     --ks-pass pass:mypassword \
     --ks mykey.keystore \
     ./seglapp.apk
+```
+
+Finally, we can install the `seglapp.apk` on an Android device.
+The device in question must be connected over USB and have
+[USB debugging enabled][18].
+
+```
 $ adb install seglapp.apk
 ```
 
-If all goes well, you should now have an app named `seglapp` installed
-on your Android device. It may be necessary to run `adb` under `sudo`,
-or to `su` and run `adb` as root, depending your system and user permissions.
+If all went well, we should have an app named `seglapp`
+on our device. It may be necessary to run `adb` under `sudo`,
+or to `su` and run `adb` as root, depending on the system and user permissions.
 
-When you try opening the app, you should be
+When we open the app, we should be
 met with a black screen. This makes perfect sense: we haven't drawn anything
 yet. What we have done, however, is print some log messages.
 The logs for everything happening on a connected device can be viewed with
 `adb shell logcat`. That command will usually produce a deluge of information
-which, while potentially helpful for complex debugging if piped to a file, is
-of little use as command line output. To view only the logs produced
-by our code, we can provide `logcat` with a set of filters.
+which, while potentially helpful if piped to a file, is
+of little use as command line output. To view only logs produced
+by our code, we can use [filters][6].
 
 ```bash
 adb shell logcat SEGL:I *:S
@@ -269,8 +287,7 @@ adb shell logcat SEGL:I *:S
 The `SEGL:I` filter tells `logcat` to print messages tagged with `SEGL` that
 have `ANDROID_LOG_INFO` priority or higher, while the `*:S` filter silences all
 other log messages. Recall that our `__android_log_print` calls used the
-tag `"SEGL"`. It may be worth scanning through the
-[logcat reference][6].
+tag `"SEGL"`.
 
 Try running the above `logcat` command, then opening `seglapp` on your
 Android device. Look at what log messages are printed when you open, minimize,
@@ -288,20 +305,16 @@ $ adb shell logcat SEGL:I *:S
 07-24 14:37:28.085 25465 25484 I SEGL    : APP_CMD_DESTROY
 ```
 
-## Drawing graphics with EGL and OpenGL ES 2.0
+## Drawing graphics with EGL and OpenGL
 
-There are two basic directions our build could take to get access to the
-EGL C API: link `libEGL.so` as shared library at compile time (with `-lEGL`),
-or use the `dlopen` function to load it runtime. I generally prefer to reduce
-build dependencies wherever possible, and therefore we will
-be going the `dlopen`
-route. If someone ever needs to create their own
-Android sysroot (e.g. they don't have access
-to an NDK distribution), then `libEGL.so` is one less
-build dependency. 
+There are two basic directions our build could take to access to the
+[EGL][12] C API: link `libEGL.so` as shared library (with `-lEGL`),
+or use [`dlopen`][11] to load it runtime. I prefer to
+reduce build dependencies wherever possible, so we will
+be going the `dlopen` route.
 
 ```c
-/* ./src/main.c */
+/* src/main.c */
 
 #include <android/log.h>
 #include <android/native_window.h>
@@ -749,7 +762,7 @@ void android_main(struct android_app *app) {
         while (elapsed >= TIMESTEP) {
             red += 0.005f;
             green += 0.006f;
-            blue += 0.007;
+            blue += 0.007f;
             if (red >= 1.0f) {
                 red -= 1.0f;
                 red_flip = !red_flip;
@@ -800,38 +813,39 @@ void android_main(struct android_app *app) {
 }
 ```
 
-The `segl_vtable_load` funciton loads `libEGL.so`
-with `dlopen`, and then constructs a virtual function table
-with each EGL 1.0 API function we need for this demo. The `segl_ctx_load` function
+The `segl_vtable_load` function loads `libEGL.so`, then constructs a
+[vtable][20]
+containing each EGL 1.0 API function needed for this demo.
+The `segl_ctx_load` function
 uses the EGL vtable to create an OpenGL ES 2.0 context and
 an EGL window surface corresponding to the Android app window.
 The `segl_ctx_unload` function destroys the EGL context and
 surface.
 
-In order to draw anything, we'll need to load a
-vtable for a subset of the OpenGL ES 2.0 API.
+In order to draw anything, we'll need to load a second
+vtable containing some OpenGL functions.
 The `sgles2_vtable_load` function loads such
-a vtable by using the EGL vtable's `GetProcAddress`
+a table, using the EGL vtable's `GetProcAddress`
 to retrieve each function pointer.
 
-The loop in `android_main` now clears the screen with a varying color.
-The `handle_cmd` function now loads an EGL context on
+The loop in `android_main` clears the screen with a varying color.
+The `handle_cmd` function loads an EGL context on
 `APP_CMD_INIT_WINDOW` events and destroys the context
 on `APP_CMD_TERM_WINDOW` events.
 
-**NOTE:** If we were making a real application, we should really just load the
+**Note:** In a real project you should probably load the
 full EGL 1.0 and OpenGL ES 2.0 APIs (or
-whatever API versions you decide to use). The tiny
-vtables in this article were for used for readability.
+whichever API versions you decide to use).
 
 Going through the same process as before, we can
-compile our C code, re-package `seglapp.apk`, and install
+compile our shared library, re-package `seglapp.apk`, and install
 it on our device.
 
 ```bash
 $ adb uninstall org.seglorg.seglapp
 $ rm temp2.apk seglapp.apk
-$ aarch64-linux-android35-clang -Wall -Wextra -Wno-unused-parameter \
+$ clang --target=aarch64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -ldl -landroid -llog
@@ -852,17 +866,29 @@ background which can be seemlessly suspended and resumed.
 
 ## Multi-architecture builds
 
-The `seglapp.apk` package built above will only work on 64 bit ARM devices.
+The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
-is very simple: just add a separate subdirectory in `./build/lib` for
-each architecture that you wish to target! For example, below
-we add support for 32 bit ARM devices.
+is very simple: add a separate subdirectory in `build/lib` for
+each architecture! For example, below
+we add support for 32 bit ARM, x86, and x86_64.
 
 ```bash
-$ mkdir ./build/lib/armeabi-v7a
-$ armv7a-linux-androideabi35-clang -Wall -Wextra -Wno-unused-parameter \
-    -mfloat-abi=soft \
-    -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
+$ mkdir -p ./build/lib/armeabi-v7a
+$ clang --target=armv7a-linux-androideabi22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/armeabi-v7a/libseglapp.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -ldl -landroid -llog
+$ mkdir -p ./build/lib/x86
+$ clang --target=i686-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86/libseglapp.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -ldl -landroid -llog
+$ mkdir -p ./build/lib/x86_64
+$ clang --target=x86_64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86_64/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -ldl -landroid -llog
 # then proceed with re-packaging as usual
@@ -870,28 +896,41 @@ $ armv7a-linux-androideabi35-clang -Wall -Wextra -Wno-unused-parameter \
 
 ## Next steps
 
-We still haven't handled any input in our `handle_input` function, so
-a good first step would be to take
-a look at the [Android NDK input documentation][7].
-We only used the `ANative` API to get the width and height of the
+Our OpenGL example was very dissapointing, we didn't even draw a triangle!
+Loading the rest of the OpenGL ES API into the vtable, adding a basic
+shader pipeline, and pushing some vertices to the GPU
+should be priority number one.
+
+We also haven't handled any input in our `handle_input` function,
+the next step there is to
+look at the Android NDK [input documentation][7].
+We used the `ANativeWindow` API to get the width and height of the
 application window, but there is [a lot more functionality available][10].
 There are also a
 few more `APP_CMD` events that may be useful, so it might be good
 to read through the [native app glue docs][8] as well (and look
 through the `android_native_app_glue.c` source file).
 
-As mentioned above, it is a very good idea to change
-the app and org names when building a real `.apk` package, and to load
-the full EGL and OpenGL APIs into the vtables. A more
-finished version of this example is available on [GitHub][9].
+A finished version of the example in this article is available on [GitHub][9].
 
 [1]: https://github.com/cnlohr/rawdrawandroid
 [2]: https://github.com/permutationlock/libavengraph
 [3]: https://github.com/HomuHomu833/android-sdk-custom
 [4]: https://github.com/HomuHomu833/android-ndk-custom
 [5]: https://github.com/Sable/android-platforms
-[6]: https://developer.android.com/tools/logcat
+[6]: https://developer.android.com/tools/logcat#filteringOutput
 [7]: https://developer.android.com/ndk/reference/group/input
 [8]: https://developer.android.com/reference/games/game-activity/group/android-native-app-glue
 [9]: https://github.com/permutationlock/simple_android_egl_app
 [10]: https://developer.android.com/ndk/reference/group/native-activity
+[11]: https://www.man7.org/linux/man-pages/man3/dlopen.3.html
+[12]: https://www.khronos.org/egl/
+[13]: https://www.khronos.org/opengles/
+[14]: https://openjdk.org/index.html
+[15]: https://developer.android.com/studio
+[16]: https://developer.android.com/ndk/downloads
+[17]: https://musl.libc.org/
+[18]: https://developer.android.com/studio/debug/dev-options
+[19]: https://chimera-linux.org/
+[20]: https://en.wikipedia.org/wiki/Virtual_method_table
+[21]: https://en.wikipedia.org/wiki/Java_Native_Interface
