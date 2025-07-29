@@ -28,11 +28,11 @@ it had to:
  2. compile with any C compiler that supports the C99 standard (or later);
  3. link with a basic `x86_64` assembly runtime (no `libc` or other libraries).
 
-The above restrictions made C preprocesser directives mostly unnecessary,
-so none were be used. I.e. `#include`, `#define`, etc. were not allowed.
+The third restriction made C preprocesser directives mostly unnecessary,
+so none were be used (i.e. `#include` and `#define` were not allowed).
+That was undoubtedly a bit stupid, but I refer you to the project title.
 
-Code for the finished game is available on [GitHub][3]. Each commit
-corresponds to a section of this article.
+Code for the finished game is available on [GitHub][3].
 
 ## Requirements
                         
@@ -50,7 +50,7 @@ for the `as` assembler and
 environment discussed later in the article you will need
 [QEMU](https://www.qemu.org/).
 
-By design the game will only build for
+By design, the game will only build for
 `x86_64` Linux.
 On Windows the default Ubuntu
 [WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install)
@@ -1825,8 +1825,9 @@ enum main_error {
     if (conn_index == res->connectors_len || conn == 0) {
         return MAIN_ERROR_DRM_FIND_CONNECTOR;
     }
-	```
-                        We can retreive an encoder in a similar manner.
+```
+
+We can retreive an encoder in a similar manner.
 						
 ```c
 enum drm_ioctl {
