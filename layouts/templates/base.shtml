@@ -2,8 +2,8 @@
 <html>
   <head id="head">
     <meta charset="utf-8">
-    <meta name="viewport" content="initial-scale=1">
-    <title :text="$site.title"></title>
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <!-- icons -->
     <link rel="icon" href="$site.asset('favicon.ico').link()">
     <link rel="icon" type="image/png" sizes="192x192" href="$site.asset('android-chrome-192x192.png').link()">
@@ -22,7 +22,6 @@
     <super>
   </head>
   <body id="body">
-    <h1 class="site-title"><a href="$site.page('').link()" :text="$site.title"></a></h1>
     <super>
   </body>
 </html>

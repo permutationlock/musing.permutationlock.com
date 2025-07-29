@@ -1,63 +1,67 @@
 :root {
-  --light-yellow: #e5c07b;
-  --dark-yellow: #d19a66;
-  --blue: #61afef;
-  --cyan: #56b6c2;
-  --light-red: #e06c75;
-  --dark-red: #be5046;
-  --comment-gray: #5c6370;
-  --magenta: #c678dd;
+  --string: #e96c75;
+  --keyword: #d19a66;
+  --type: #61afef;
+  --number: #c678dd;
+  --comment: #828997;
+  --code-background: #222;
+}
+
+@media(prefers-color-scheme: light) {
+  :root {
+    --string: #e45649;
+    --keyword: #986801;
+    --type: #4078f2;
+    --number: #a626a4
+    --comment: #a0a1a7;
+    --code-background: #f4f4f4;
+  }
 }
 
 pre {
   overflow: auto;
   max-height: 600px;
-  background-color: #222;
   padding: 10px 5px;
-}
-
-code.ziggy {
-  color: var(--cyan);
-}
-
-code.ziggy .keyword,
-code.ziggy .type {
-  color: var(--light-yellow);
-}
-
-code.ziggy .string {
-  color: var(--dark-yellow);
-}
-
-code.ziggy .numeric.constant {
-  color: var(--magenta);
-}
-
-code.ziggy .function {
-  color: var(--blue);
+  background-color: var(--code-background);
 }
 
 code.nasm .label,
 code.nasm .function {
-  color: var(--blue);
+  color: var(--type);
+}
+
+code.xml .keyword {
+  color: var(--keyword);
+}
+
+code.xml .string {
+  color: var(--string);
+}
+
+code.xml .number {
+  color: var(--number);
+}
+
+code.xml .tag {
+  color: var(--type);
 }
 
 code.c .keyword {
-  color: var(--light-yellow);
+  color: var(--keyword);
 }
 
 code.c .type {
-  color: var(--blue);
+  color: var(--type);
 }
 
 code.c .number {
-  color: var(--light-red);
+  color: var(--number);
 }
 
 code.c .string {
-  color: var(--magenta);
+  color: var(--string);
 }
 
 code.c .comment{
-  color: var(--comment-gray);
+  color: var(--comment);
 }

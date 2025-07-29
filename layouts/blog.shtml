@@ -1,5 +1,6 @@
 <extend template="base.shtml">
 <head id="head">
+  <title :text="$site.title"></title>
   <style>
     .date {
       font-size: 0.9em;
@@ -11,6 +12,7 @@
   </style>
 </head>
 <body id="body">
+  <h1 class="site-title" :text="$site.title"></h1>
   <div :html="$page.content()"></div>
   <div>
     <div :loop="$page.subpages()">

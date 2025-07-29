@@ -1,7 +1,7 @@
 ---
 .title = "Blog",
-.date = @date("1990-01-01T00:00:00"),
-.author = "Sample Author",
+.date = @date("2025-07-25T00:00:00"),
+.author = "Aven",
 .layout = "blog.shtml",
 .alternatives = [{ 
     .name = "rss",
@@ -13,5 +13,5 @@
 
 *I like the ants.*
 
-Links: [RSS]($link.alternative('rss')) - [GitHub](https://github.com/permutationlock) - [letterboxd](https://letterboxd.com/kieroda/)
+Links: [RSS]($link.alternative('rss')) - [GitHub](https://github.com/permutationlock) - [Letterboxd](https://letterboxd.com/kieroda/)
 

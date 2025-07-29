@@ -1,9 +1,22 @@
+:root {
+  --text: #abb2bf;
+  --background: #111;
+}
+
+@media(prefers-color-scheme: light) {
+  :root {
+    --text: #494b53;
+    --background: #fafafa;
+  }
+}
+
 h1,
 h2,
 h3,
 h4,
 h5 {
-  color: #ddd;
+  margin-top: 0.5ch;
+  margin-bottom: 0.5ch;
 }
 
 h1 a,
@@ -15,73 +28,62 @@ h5 a {
   font-weight: bold;
 }
 
-b,
-strong {
-  color: #fff;
+html {
+  font-family: "Georgia", serif;
+  font-size: 1.0em;
+  justify-content: center;
+  color: var(--text);
+  background-color: var(--background);
 }
 
 a {
-  color: #eee;
+  color: var(--text);
 }
 
-html {
-  color: #ccc;
-  font-family: "Georgia", serif;
-  font-size: 1.2em;
-  display: flex;
-  flex-direction: row;
-  justify-content: center;
-  background-color: #111;
+img {
+  max-width: 50ch;
+  width: 100%;
+  margin: auto;
 }
 
 body {
-  min-width: 435px;
-  width: 800px;
-  padding: 15px;
-  display: flex;
+  width: device-width;
+  max-width: 80ch;
+  padding: 2.0ch;
+  margin-left: auto;
+  margin-right: auto;
   flex-direction: column;
 }
 
 .site-title {
   font-size: 2.5em;
-  margin-bottom: 10px;
+  margin-top: 0.0ch;
+  margin-bottom: 0.5ch;
   text-align: center;
 }
 
-nav {
-  text-align: center;
-  font-size: 1.2em;
-  margin-bottom: 20px;
+ol {
+  margin-top: 0.5ch;
+  margin-bottom: 0.5ch;
 }
 
-.block {
-  border: 1px dotted white;
-  padding: 5px 15px;
-  margin: 0 10px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+li {
+  margin-top: 0.25ch;
+  margin-bottom: 0.25ch;
 }
 
-.block h1 {
-  font-size: 1em;
-  text-align: center;
-  margin-bottom: 0;
+blockquote {
+  margin-top: 1.0ch;
+  margin-bottom: 1.0ch;
 }
 
-.small {
-  font-size: 0.8em;
-}
-
-.wave {
-  background: #111;
-  color: #fff;
-  text-shadow: 1px 1px 10px #fff, 1px 1px 10px #ccc;
+p {
+  margin-top: 0.5ch;
+  margin-bottom: 0.5ch;
 }
 
 footer {
-  margin-top: 30px;
+  margin-top: 1.5ch;
   display: flex;
   flex-direction: column;
   align-items: center;

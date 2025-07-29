@@ -1,11 +1,22 @@
 <extend template="base.shtml">
 <head id="head">
+  <title :text="$page.title"></title>
   <style>
+    #site-title {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+    }
+
+    #site-title h1 {
+      margin-top: 0;
+    }
+
     #prev-next {
      display: flex;
      flex-direction: row;
      justify-content: space-between;
-     margin-top: 40px;
+     margin-top: 1ch;
     }
 
     figure {
@@ -21,13 +32,21 @@
   </style>
 </head>
 <body id="body">
-  <h1 :text="$page.title"></h1>
+  <div id="site-title">
+    <div>
+      <h1 :text="$page.title"></h1>
+    </div>
+    <div>
+      <a href="$site.page('').link()"><h1>↑</h1></a>
+    </div>
+  </div>
   <div>
     <span :text="$page.date.format('January 02, 2006')">
     </span>
     <div style="display: inline;" :if="$page.custom.get?('git')">
       |
-    <a href="$if.prefix('https://github.com/permutationlock/')">GitHub</a></div>
+      <a href="$if.prefix('https://github.com/permutationlock/')" target="_blank">GitHub</a>
+    </div>
   </div>
 
   <div class="post" :html="$page.content()"></div>
