@@ -12,6 +12,10 @@
       margin-top: 0;
     }
 
+    #site-title a {
+      text-decoration: none;
+    }
+
     #prev-next {
      display: flex;
      flex-direction: row;

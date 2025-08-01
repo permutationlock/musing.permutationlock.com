@@ -62,7 +62,8 @@ body {
   text-align: center;
 }
 
-ol {
+ol,
+ul {
   margin-top: 0.5ch;
   margin-bottom: 0.5ch;
 }

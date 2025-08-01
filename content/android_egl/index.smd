@@ -1,5 +1,5 @@
 ---
-.title = "Simple Native Android APKs",
+.title = "Simple Android Apps in C",
 .date = @date("2025-07-25T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -11,44 +11,105 @@
 
 > *Is there a simple way to build Android apps using C?*
 
-According
-to the [rawdraw android][1] project, the answer is yes! But, of course, I want to
-build a minimal example from scratch.
+The [rawdraw android][1] project shows that the answer is yes! But I want to
+break the process down even further and
+construct a minimal example from scratch.
 The goal of this article is to go from zero to [OpenGL ES][13] context on my
-Pixel 7a phone using C and as few Android SDK command line tools as is "easily possible."
+Pixel 7a phone using C and command-line tools.
 
-**Disclaimer:** I am a curious C programmer, not an Android developer. The last time
-that I opened Android Studio was in University in 2016 when I was working on a probe
-to test snow conditions.
+**Disclaimer:** By most people's definition, the *simple* way to build an app
+with C is probably to use [Android Studio][15].
+Simple in this article, however, means having few dependencies and build steps.
 
-## Requirements
+## Build environment
 
-We will need `zip` and `unzip` to create and unpack `.zip` archives.
-We will also need a few Android SDK tools (`aapt` or `aapt2`,
-`zipalign`, `apksigner`, `adb`) and
-the Android NDK `clang` toolchain. The standard [SDK][15] (command line only)
-and [NDK][16] distributions should come with all that
-we need. Alternatively, [sdk-custom][3] and [ndk-custom][4] provide
-static Linux binaries, which are useful for developing on non-standard Linux
-distributions (e.g. the [musl][17] based [distro][19] I currently use).
+This article assumes that we are working in a shell on a
+Unix/POSIX-like operating system (e.g. `bash` on Linux). The
+Android command-line tools are the same on Windows though,
+so with a bit of work translating POSIX commands it is
+possible to follow along from PowerShell (I've done it myself).
 
-We'll also need [OpenJDK][14] (I'd love to avoid this,
-but that is an adventure for another day).
-In order to install a `.apk` app on a modern Android device, it must be
-signed with `apksigner`, which depends on `java`.
-Moreover, we will need `keytool` from OpenJDK to generate a keystore file.
+### OpenJDK
+
+We will need [OpenJDK][14] for `java` and `keytool`. Preferably,
+we can install OpenJDK through our system package manager. Otherwise,
+if a [distribution is available][27] for our CPU architecture and OS, then we
+can pull a local copy as shown below. If not, there are
+[instructions][28] to build the JDK from [source][32].
 
 ```bash
-$ keytool -genkey -v -keystore mykey.keystore -alias mykey \
-    -keyalg RSA -keysize 2048 -validity 10000 \
-    -storepass mypassword -keypass mypassword \
-    -dname "CN=example.com, OU=ID, O=Example, L=Callar, S=Morvern, C=GB"
+$ curl <release-url-for-your-arch-os> \
+    -o openjdk24.tar.gz
+$ tar -xvf openjdk24.tar.gz
+$ export JAVA_HOME=/path/to/jdk-24.0.2
+$ export PATH="/path/to/jdk-24.0.2/bin:$PATH"
 ```
 
-Finally, we'll need the `android.jar` file for the target Android SDK version (we
-will target version 35 in this article),
-which can be acquired through the SDK or [downloaded
-separately][5].
+We have to add the `jdk-24.0.2/bin` directory to our `PATH` because
+the Android SDK `apksigner` script expects a `java` command.
+
+### Android tools
+
+The Android specific tools we'll be using are `aapt` (or `aapt2`),
+`zipalign`, and `apksigner` from the SDK build-tools,
+`adb` from the SDK platform-tools, and
+the `clang` tool-chain from the NDK.
+
+#### The official way
+
+If we are on a standard GNU Linux distribution, MacOS, or Windows,
+we can download and unpack the official [Android Studio][15] "command-line
+tools only" distribution.
+The [`sdkmanager`][26] can then be used to install the SDK build-tools,
+platforms, and platform-tools, as well as the [NDK][16].
+
+```bash
+$ curl <release-url-for-your-arch-os> \
+    -o cmdline-tools.zip
+$ mkdir android_sdk
+$ unzip cmdline-tools.zip -d ./android_sdk/
+$ ./android_sdk/cmdline-tools/bin/sdkmanager --sdk-root ./android_sdk \
+    "build-tools;35.0.1" \
+    "platforms;android-35" \
+    "platform-tools" \
+    "ndk;29.0.13599879"
+```
+
+All the files we need should now be installed.
+
+```
+./android_sdk/build-tools/35.0.1/aapt
+./android_sdk/build-tools/35.0.1/apksigner
+./android_sdk/build-tools/35.0.1/zipalign
+./android_sdk/platform-tools/adb
+./android_sdk/platforms/android-35/android.jar
+./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/clang
+```
+
+For brevity, and to accommodate different installations, from now on we will
+omit the full path and refer to each of the above by file name.
+Optionally, we can add each relevant directory our `PATH`.
+
+#### A static alternative for Linux
+
+If we are on a non-standard Linux
+distribution, e.g. the [musl][17]-based [distro][19] I primarily use,
+then the official binary distribution may not work.
+The [sdk-custom][3] and [ndk-custom][4] GitHub pages provide
+static Linux binary releases for the Android SDK build-tools,
+platform-tools, and the Android NDK.
+
+We'll still need the `android.jar` file for the Android SDK platform,
+but that can be downloaded from the [official repo][25] or the third
+party [Sable collection][5].
+
+#### Building from source
+
+If all else fails, everything in the SDK and NDK is open source,
+split across [several repos][24].
+I have not tried to build the tools myself yet, but the
+[sdk-custom][3] and [ndk-custom][4]
+projects mentioned above look like a useful resource.
 
 ## Packaging an Android APK
 
@@ -64,14 +125,13 @@ The general build strategy will be as follows.
     using an `AndroidManifest.xml` text file, an
     `icon.png` mipmap resource, and the `android.jar` file.
  2. Extract `temp.apk` into `build/` and add a `build/lib/` directory.
- 3. Compile our C code into a `build/lib/aarch64/libseglapp.so` shared library
-    using the NDK `clang` toolchain.
- 4. Re-package the `build` directory into `temp2.apk` with `zip`.
+ 3. Compile our C code into a `build/lib/aarch64/libseglapp.so` shared library.
+ 4. Re-package the `build/` directory into `temp2.apk` with `zip`.
  5. Run the `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
  6. Sign `seglapp.apk` with `apksigner`.
 
-The inital `temp.apk` will be packaged from the following `template`
-directory.
+To package the initial `temp.apk`, we will first create a `template/`
+directory that is structured as follows.
 
 ```
  - template/
@@ -80,12 +140,16 @@ directory.
          - mipmap/
              - icon.png
 ```
-Our example `template/AndroidManifest.xml` is shown below. Note the
-minimum and target SDK version, the package name `org.seglorg`,
-and the app name `seglapp`. In a real project these
-would need to change to reflect the application.
+
+Our `template/AndroidManifest.xml` is shown below. Note the
+minimum and target SDK version (22 and 35), the package name (`org.seglorg`),
+and the app name (`seglapp`). In a real project these
+would need to reflect the given application, see the
+[app manifest documentation][29].
 
 ```xml
+<!-- template/AndroidManifest.xml -->
+
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <manifest xmlns:tools="http://schemas.android.com/tools"
         xmlns:android="http://schemas.android.com/apk/res/android"
@@ -119,20 +183,20 @@ Using `aapt` we may now package our
 initial `.apk`.
 
 ```bash
-$ aapt package -v -f  -F ./temp.apk -I ./android.jar \
+$ aapt package -v -f  -F ./temp.apk -I android.jar \
     -M ./template/AndroidManifest.xml \
     -S ./template/res --target-sdk-version 35
 ```
 
-To use the newer `aapt2` binary (`aapt` has been deprecated),
-the process is similar, but with some extra steps as the `aapt package` command
+To use the newer [`aapt2`][33] binary (`aapt` has been deprecated),
+the process is similar, but with some extra steps. The `aapt package` command
 has been split into `aapt2 compile` and `aapt2 link`.
 
 ```bash
 $ mkdir ./template/compiled
 $ aapt2 compile -v ./template/res/mimpmap/icon.png \
     -o ./template/compiled
-$ aapt2 link -v -o ./temp.apk -I ./android.jar \
+$ aapt2 link -v -o ./temp.apk -I android.jar \
     --manifest ./template/AndroidManifest.xml \
     --target-sdk-version 35 \
     ./template/compiled/mipmap_icon.png.flat
@@ -152,25 +216,22 @@ Archive:  ./temp.apk
 
 ## Building a native Android library with C
 
-The link between native code (the C shared library we will be building) and the
-Java code that drives all Android applications is provided by the
-Android NDK in
+The link between our the C code and the Java code that drives all Android
+apps is provided by
 [`android_native_app_glue.h`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.h)
 and
 [`android_native_app_glue.c`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.c).
 The glue exports
-an `ANativeActivity_onCreate` function that will be called from Java through
-the [Java Native Inteface (JNI)][21] on startup. This
-function sets up a collection of callbacks that allow our C code to  respond
-to events from the main Java thread(s), and then uses `pthread_create` to
-initialize a C main thread and call `android_main`. It is the
-`android_main` function that will serve as the C entry point into our
-application.
+an `ANativeActivity_onCreate` function that is called through
+the [Java Native Interface][21] on startup. This
+function sets up callbacks to allow our C code to respond
+to events from the Java thread(s), then uses [`pthread_create`][31] to
+start a new thread that calls `android_main`. The
+`android_main` function serves as our C entry point.
 
-We will copy both glue source files into a new `src` directory
-and start our own `src/main.c`. To begin, we will setup event and input
-handler callbacks and run a main loop that
-polls the native activity.
+We will copy both glue source files into a new `src/` directory
+and create a `src/main.c`. To begin, we will set up event callbacks,
+then run a main loop that polls for events.
 
 ```c
 /* src/main.c */
@@ -238,7 +299,7 @@ void android_main(struct android_app *app) {
 }
 ```
 
-We can now build the library and re-package the `.apk`. In this article `clang`
+We can now build the library and re-package the `.apk`. Recall that `clang`
 will always refer to the binary distributed with the Android NDK.
 
 ```bash
@@ -253,11 +314,19 @@ $ zip -D4r ../temp2.apk .
 $ zip -D0r ../temp2.apk ./resources.arsc ./AndroidManifest.xml
 $ cd ..
 $ zipalign -v 4 ./temp2.apk ./seglapp.apk
+$ keytool -genkey -v -keystore mykey.keystore -alias mykey \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -storepass mypassword -keypass mypassword \
+    -dname "CN=example.com, OU=ID, O=Example, L=Callar, S=Morvern, C=GB"
 $ apksigner sign --key-pass pass:mypassword \
     --ks-pass pass:mypassword \
     --ks mykey.keystore \
     ./seglapp.apk
 ```
+
+The number at the end of the `clang` target is the [minimum SDK version][22].
+Above we defined a minimum version of 22 in our
+`template/AndroidManifest.xml`.
 
 Finally, we can install the `seglapp.apk` on an Android device.
 The device in question must be connected over USB and have
@@ -269,15 +338,15 @@ $ adb install seglapp.apk
 
 If all went well, we should have an app named `seglapp`
 on our device. It may be necessary to run `adb` under `sudo`,
-or to `su` and run `adb` as root, depending on the system and user permissions.
+or to `su` and run `adb` as root, depending on system and user permissions.
 
-When we open the app, we should be
-met with a black screen. This makes perfect sense: we haven't drawn anything
-yet. What we have done, however, is print some log messages.
+When we open the app, we are
+met with a black screen: we haven't drawn anything
+yet. What we have done, however, is printed some log messages.
 The logs for everything happening on a connected device can be viewed with
 `adb shell logcat`. That command will usually produce a deluge of information
 which, while potentially helpful if piped to a file, is
-of little use as command line output. To view only logs produced
+of little use as command-line output. To view only logs produced
 by our code, we can use [filters][6].
 
 ```bash
@@ -823,19 +892,28 @@ The `segl_ctx_unload` function destroys the EGL context and
 surface.
 
 In order to draw anything, we'll need to load a second
-vtable containing some OpenGL functions.
+vtable containing OpenGL functions.
 The `sgles2_vtable_load` function loads such
-a table, using the EGL vtable's `GetProcAddress`
-to retrieve each function pointer.
+a table using `GetProcAddress` from the EGL vtable.
+
+**Note:** In a real project we should probably load the
+full EGL 1.0 and OpenGL ES 2.0 APIs (or
+whichever API versions we choose).
 
 The loop in `android_main` clears the screen with a varying color.
 The `handle_cmd` function loads an EGL context on
-`APP_CMD_INIT_WINDOW` events and destroys the context
+`APP_CMD_INIT_WINDOW` events, and destroys the context
 on `APP_CMD_TERM_WINDOW` events.
 
-**Note:** In a real project you should probably load the
-full EGL 1.0 and OpenGL ES 2.0 APIs (or
-whichever API versions you decide to use).
+**Note:** The `INIT_WINDOW`/`TERM_WINDOW` events are also
+sent when the app is minimized/resumed, respectively.
+When `TERM_WINDOW` is handled, it is important to maintain the
+app state, but release
+all OpenGL context data (shaders, textures, vertex buffers, etc.)
+before the call to `segl_ctx_unload`. Then, when `INIT_WINDOW` is handled,
+the OpenGL data must be re-constructed after `segl_ctx_load`.
+Our application just clears the background, so we avoid
+dealing with this.
 
 Going through the same process as before, we can
 compile our shared library, re-package `seglapp.apk`, and install
@@ -862,13 +940,13 @@ $ adb install seglapp.apk
 ```
 
 Running `seglapp` should now display a varying solid color
-background which can be seemlessly suspended and resumed.
+background which can be seamlessly suspended and resumed.
 
 ## Multi-architecture builds
 
 The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
-is very simple: add a separate subdirectory in `build/lib` for
+is very simple: add a separate sub-directory in `build/lib/` for
 each architecture! For example, below
 we add support for 32 bit ARM, x86, and x86_64.
 
@@ -894,9 +972,12 @@ $ clang --target=x86_64-linux-android22 \
 # then proceed with re-packaging as usual
 ```
 
+The devices I own are all `aarch64`, but I've tested
+other architectures with [emulators][30].
+
 ## Next steps
 
-Our OpenGL example was very dissapointing, we didn't even draw a triangle!
+Our OpenGL example was very disappointing, we didn't even draw a triangle!
 Loading the rest of the OpenGL ES API into the vtable, adding a basic
 shader pipeline, and pushing some vertices to the GPU
 should be priority number one.
@@ -928,9 +1009,21 @@ A finished version of the example in this article is available on [GitHub][9].
 [13]: https://www.khronos.org/opengles/
 [14]: https://openjdk.org/index.html
 [15]: https://developer.android.com/studio
-[16]: https://developer.android.com/ndk/downloads
+[16]: https://developer.android.com/ndk
 [17]: https://musl.libc.org/
 [18]: https://developer.android.com/studio/debug/dev-options
 [19]: https://chimera-linux.org/
 [20]: https://en.wikipedia.org/wiki/Virtual_method_table
 [21]: https://en.wikipedia.org/wiki/Java_Native_Interface
+[22]: https://developer.android.com/ndk/guides/other_build_systems#overview
+[23]: https://developer.android.com/tools/releases/platform-tools
+[24]: https://android.googlesource.com/platform/
+[25]: https://android.googlesource.com/platform/prebuilts/fullsdk/platforms/+/refs/heads/main/
+[26]: https://developer.android.com/tools/sdkmanager
+[27]: https://jdk.java.net/24/
+[28]: https://github.com/openjdk/jdk/blob/master/doc/building.md
+[29]: https://developer.android.com/guide/topics/manifest/manifest-intro
+[30]: https://developer.android.com/studio/run/emulator-commandline
+[31]: https://www.man7.org/linux/man-pages/man3/pthread_create.3.html
+[32]: https://github.com/openjdk/jdk/tree/master
+[33]: https://developer.android.com/tools/aapt2
