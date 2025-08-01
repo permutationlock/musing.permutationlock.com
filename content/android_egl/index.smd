@@ -1,5 +1,5 @@
 ---
-.title = "Simple Android Apps in C",
+.title = "Simple C Android Apps",
 .date = @date("2025-07-25T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -9,13 +9,17 @@
 },
 ---
 
-> *Is there a simple way to build Android apps using C?*
+> *Anyway, do you guys have an Android charger?*
+>
+> *I told you, we don't support that.*
 
-The [rawdraw android][1] project shows that the answer is yes! But I want to
-break the process down even further and
+The [rawdraw android][1] project shows that it is not difficult
+to build fully functional Android apps from the command-line without
+writing any Java. In this article we will break the process down into
+basic steps and
 construct a minimal example from scratch.
-The goal of this article is to go from zero to [OpenGL ES][13] context on my
-Pixel 7a phone using C and command-line tools.
+The goal is to go from zero to [OpenGL ES][13] context on my
+Pixel 7a phone using C and basic command-line tools.
 
 **Disclaimer:** By most people's definition, the *simple* way to build an app
 with C is probably to use [Android Studio][15].
@@ -26,7 +30,7 @@ Simple in this article, however, means having few dependencies and build steps.
 This article assumes that we are working in a shell on a
 Unix/POSIX-like operating system (e.g. `bash` on Linux). The
 Android command-line tools are the same on Windows though,
-so with a bit of work translating POSIX commands it is
+so with a bit of work translating POSIX commands, it is
 possible to follow along from PowerShell (I've done it myself).
 
 ### OpenJDK
@@ -38,8 +42,7 @@ can pull a local copy as shown below. If not, there are
 [instructions][28] to build the JDK from [source][32].
 
 ```bash
-$ curl <release-url-for-your-arch-os> \
-    -o openjdk24.tar.gz
+$ curl <release-url-for-your-arch-os> -o openjdk24.tar.gz
 $ tar -xvf openjdk24.tar.gz
 $ export JAVA_HOME=/path/to/jdk-24.0.2
 $ export PATH="/path/to/jdk-24.0.2/bin:$PATH"
@@ -64,8 +67,7 @@ The [`sdkmanager`][26] can then be used to install the SDK build-tools,
 platforms, and platform-tools, as well as the [NDK][16].
 
 ```bash
-$ curl <release-url-for-your-arch-os> \
-    -o cmdline-tools.zip
+$ curl <release-url-for-your-arch-os> -o cmdline-tools.zip
 $ mkdir android_sdk
 $ unzip cmdline-tools.zip -d ./android_sdk/
 $ ./android_sdk/cmdline-tools/bin/sdkmanager --sdk-root ./android_sdk \
@@ -237,6 +239,7 @@ then run a main loop that polls for events.
 /* src/main.c */
 
 #include <android/log.h>
+
 #include "android_native_app_glue.h"
 
 #define SEGL_LOG_ID "SEGL"
@@ -387,11 +390,15 @@ be going the `dlopen` route.
 
 #include <android/log.h>
 #include <android/native_window.h>
+
 #include <dlfcn.h>
+
 #include <stdlib.h>
 #include <time.h>
+
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+
 #include "android_native_app_glue.h"
 
 #define SEGL_LOG_ID "SEGL"
@@ -907,13 +914,10 @@ on `APP_CMD_TERM_WINDOW` events.
 
 **Note:** The `INIT_WINDOW`/`TERM_WINDOW` events are also
 sent when the app is minimized/resumed, respectively.
-When `TERM_WINDOW` is handled, it is important to maintain the
-app state, but release
-all OpenGL context data (shaders, textures, vertex buffers, etc.)
+When `TERM_WINDOW` is handled, it is important to release
+all OpenGL context state (shaders, textures, vertex buffers, etc.)
 before the call to `segl_ctx_unload`. Then, when `INIT_WINDOW` is handled,
-the OpenGL data must be re-constructed after `segl_ctx_load`.
-Our application just clears the background, so we avoid
-dealing with this.
+the OpenGL state must be re-constructed.
 
 Going through the same process as before, we can
 compile our shared library, re-package `seglapp.apk`, and install
@@ -947,8 +951,7 @@ background which can be seamlessly suspended and resumed.
 The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
 is very simple: add a separate sub-directory in `build/lib/` for
-each architecture! For example, below
-we add support for 32 bit ARM, x86, and x86_64.
+each architecture! Below we add support for 32 bit ARM, x86, and x86_64.
 
 ```bash
 $ mkdir -p ./build/lib/armeabi-v7a
@@ -986,7 +989,7 @@ We also haven't handled any input in our `handle_input` function,
 the next step there is to
 look at the Android NDK [input documentation][7].
 We used the `ANativeWindow` API to get the width and height of the
-application window, but there is [a lot more functionality available][10].
+application window, but there is [more functionality available][10].
 There are also a
 few more `APP_CMD` events that may be useful, so it might be good
 to read through the [native app glue docs][8] as well (and look
