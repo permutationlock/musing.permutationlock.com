@@ -13,21 +13,15 @@
 >
 > *I told you, we don't support that.*
 
-The [rawdraw android][1] project shows that it is not difficult
-to build fully functional Android apps from the command-line without
-writing any Java. In this article we will break the process down into
-basic steps and
-construct a minimal example from scratch.
-The goal is to go from zero to [OpenGL ES][13] context on my
-Pixel 7a phone using C and basic command-line tools.
-
-**Disclaimer:** By most people's definition, the *simple* way to build an app
-with C is probably to use [Android Studio][15].
-Simple in this article, however, means having few dependencies and build steps.
+The [rawdraw android][1] project shows that it is possible
+to build fully functional Android apps using only C and command-line
+tools. In this article we'll break down the basic
+steps required to package a minimal [OpenGL ES][13]
+application from scratch, and then install it on my Pixel 7a phone.
 
 ## Build environment
 
-This article assumes that we are working in a shell on a
+I will assume that we are working in a shell on a
 Unix/POSIX-like operating system (e.g. `bash` on Linux). The
 Android command-line tools are the same on Windows though,
 so with a bit of work translating POSIX commands, it is
@@ -56,7 +50,7 @@ the Android SDK `apksigner` script expects a `java` command.
 The Android specific tools we'll be using are `aapt` (or `aapt2`),
 `zipalign`, and `apksigner` from the SDK build-tools,
 `adb` from the SDK platform-tools, and
-the `clang` tool-chain from the NDK.
+the `clang` toolchain from the NDK.
 
 #### The official way
 
@@ -101,13 +95,13 @@ The [sdk-custom][3] and [ndk-custom][4] GitHub pages provide
 static Linux binary releases for the Android SDK build-tools,
 platform-tools, and the Android NDK.
 
-We'll still need the `android.jar` file for the Android SDK platform,
+We'll still need the `android.jar` file from the Android SDK platform,
 but that can be downloaded from the [official repo][25] or the third
 party [Sable collection][5].
 
 #### Building from source
 
-If all else fails, everything in the SDK and NDK is open source,
+If all else fails, everything we need from the SDK and NDK is open source,
 split across [several repos][24].
 I have not tried to build the tools myself yet, but the
 [sdk-custom][3] and [ndk-custom][4]
@@ -126,8 +120,8 @@ The general build strategy will be as follows.
  1. Create a template `temp.apk` file with `aapt` (or `aapt2`)
     using an `AndroidManifest.xml` text file, an
     `icon.png` mipmap resource, and the `android.jar` file.
- 2. Extract `temp.apk` into `build/` and add a `build/lib/` directory.
- 3. Compile our C code into a `build/lib/aarch64/libseglapp.so` shared library.
+ 2. Extract `temp.apk` into `build/` and add a `build/lib/aarch64` directory.
+ 3. Compile a `build/lib/aarch64/libseglapp.so` shared library with `clang`.
  4. Re-package the `build/` directory into `temp2.apk` with `zip`.
  5. Run the `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
  6. Sign `seglapp.apk` with `apksigner`.
@@ -143,11 +137,15 @@ directory that is structured as follows.
              - icon.png
 ```
 
-Our `template/AndroidManifest.xml` is shown below. Note the
-minimum and target SDK version (22 and 35), the package name (`org.seglorg`),
-and the app name (`seglapp`). In a real project these
-would need to reflect the given application, see the
-[app manifest documentation][29].
+Our `template/AndroidManifest.xml` is shown below. The
+`name` property in the `<activity>`
+tag specifies that our app will use the built-in
+[`NativeActivity`][34] from the Android SDK. This special
+activity will relay Java events to our C code through
+the [Java Native Interface (JNI)][21]. Also, note the
+minimum and target SDK versions (22 and 35), the package name (`org.seglorg`),
+and the app name (`seglapp`). In a real project, these
+would need to change; see the [app manifest documentation][29].
 
 ```xml
 <!-- template/AndroidManifest.xml -->
@@ -218,25 +216,29 @@ Archive:  ./temp.apk
 
 ## Building a native Android library with C
 
-The link between our the C code and the Java code that drives all Android
-apps is provided by
+The C bindings for the Java [`NativeActivity`][34] that we specified
+in our `AndroidManifest.xml` are provided by
 [`android_native_app_glue.h`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.h)
 and
-[`android_native_app_glue.c`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.c).
+[`android_native_app_glue.c`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.c)
+in the `sources/android/` subdirectory of the NDK.
 The glue exports
-an `ANativeActivity_onCreate` function that is called through
-the [Java Native Interface][21] on startup. This
-function sets up callbacks to allow our C code to respond
-to events from the Java thread(s), then uses [`pthread_create`][31] to
-start a new thread that calls `android_main`. The
-`android_main` function serves as our C entry point.
+the `ANativeActivity_onCreate` function that will be called through
+the [JNI][21] on startup. This
+sets up callbacks to allow our C code to respond
+to events, then uses [`pthread_create`][31] to
+start a thread that calls `android_main`. The
+`android_main` function will serve as our C entry point.
 
-We will copy both glue source files into a new `src/` directory
-and create a `src/main.c`. To begin, we will set up event callbacks,
-then run a main loop that polls for events.
+We'll copy both glue files into a `src/` directory,
+then create a new file `src/main.c`. To begin, we will simply
+set up event callbacks and run a loop that polls for events.
 
 ```c
 /* src/main.c */
+
+#include <stddef.h>
+#include <stdint.h>
 
 #include <android/log.h>
 
@@ -252,7 +254,9 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_INIT_WINDOW"
             );
+
             /* app window opened or resumed, create EGL context */
+
             break;
         case APP_CMD_TERM_WINDOW:
             __android_log_print(
@@ -260,7 +264,9 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_TERM_WINDOW"
             );
+
             /* app window closed or paused, release EGL context */
+
             break;
         case APP_CMD_DESTROY:
             __android_log_print(
@@ -268,7 +274,9 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_DESTROY"
             );
+
             /* app has been closed */
+
             break;
         default:
             break;
@@ -276,18 +284,23 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
 }
 
 static int32_t handle_input(struct android_app *app, AInputEvent *event) {
-    /* handle touch and keyboard input */
+    /* handle touch and keyboard input events */
+
     return 0;
 }
 
 void android_main(struct android_app *app) {
     __android_log_print(ANDROID_LOG_INFO, SEGL_LOG_ID, "android_main");
+
     app->onAppCmd = handle_cmd;
     app->onInputEvent = handle_input;
+
     /* app started, perform initial setup */
+
     for (;;) {
         int events;
         struct android_poll_source *source;
+
         for (;;) {
             int res = ALooper_pollOnce(0, 0, &events, (void **)&source);
             if (res < 0) {
@@ -297,6 +310,7 @@ void android_main(struct android_app *app) {
                 source->process(app, source);
             }
         }
+
         /* update state and draw to screen */
     }
 }
@@ -311,7 +325,7 @@ $ clang --target=aarch64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
-    -lm -ldl -landroid -llog
+    -landroid -llog
 $ cd ./build
 $ zip -D4r ../temp2.apk .
 $ zip -D0r ../temp2.apk ./resources.arsc ./AndroidManifest.xml
@@ -331,7 +345,7 @@ The number at the end of the `clang` target is the [minimum SDK version][22].
 Above we defined a minimum version of 22 in our
 `template/AndroidManifest.xml`.
 
-Finally, we can install the `seglapp.apk` on an Android device.
+Finally, we can install `seglapp.apk` on an Android device.
 The device in question must be connected over USB and have
 [USB debugging enabled][18].
 
@@ -343,17 +357,17 @@ If all went well, we should have an app named `seglapp`
 on our device. It may be necessary to run `adb` under `sudo`,
 or to `su` and run `adb` as root, depending on system and user permissions.
 
-When we open the app, we are
+When we open the app, we should be
 met with a black screen: we haven't drawn anything
 yet. What we have done, however, is printed some log messages.
-The logs for everything happening on a connected device can be viewed with
+The logs for everything happening on a connected device may be viewed with
 `adb shell logcat`. That command will usually produce a deluge of information
 which, while potentially helpful if piped to a file, is
 of little use as command-line output. To view only logs produced
 by our code, we can use [filters][6].
 
 ```bash
-adb shell logcat SEGL:I *:S
+$ adb shell logcat SEGL:I *:S
 ```
 
 The `SEGL:I` filter tells `logcat` to print messages tagged with `SEGL` that
@@ -377,24 +391,29 @@ $ adb shell logcat SEGL:I *:S
 07-24 14:37:28.085 25465 25484 I SEGL    : APP_CMD_DESTROY
 ```
 
+**Note:** The `android_native_app_glue.c` file produces a bunch of useful log
+messages under the tag `"threaded_app"`. We can add the filter
+`threaded_app:V` to take a look.
+
 ## Drawing graphics with EGL and OpenGL
 
-There are two basic directions our build could take to access to the
-[EGL][12] C API: link `libEGL.so` as shared library (with `-lEGL`),
-or use [`dlopen`][11] to load it runtime. I prefer to
-reduce build dependencies wherever possible, so we will
-be going the `dlopen` route.
+There are two basic directions our build could take to access the
+[EGL][12] and [OpenGL ES 2.0][13] C APIs: link against the `libEGL.so` and
+`libGLESv2.so` shared libraries with
+`-lEGL` and `-lGLESv2`, or use [`dlopen`][11] to load them at runtime.
+Here we'll use the former option.
 
 ```c
 /* src/main.c */
 
-#include <android/log.h>
-#include <android/native_window.h>
-
-#include <dlfcn.h>
-
+#include <math.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+
+#include <android/log.h>
+#include <android/native_window.h>
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -402,186 +421,19 @@ be going the `dlopen` route.
 #include "android_native_app_glue.h"
 
 #define SEGL_LOG_ID "SEGL"
-#define TIMESTEP 16L * 1000L * 1000L
+#define NSEC_PER_SEC_F (1e9f)
+#define PERIOD (int64_t)(2.0f * M_PI * NSEC_PER_SEC_F)
 
-struct segl_vtable {
-    PFNEGLCHOOSECONFIGPROC ChooseConfig;
-    PFNEGLCREATECONTEXTPROC CreateContext;
-    PFNEGLCREATEWINDOWSURFACEPROC CreateWindowSurface;
-    PFNEGLDESTROYCONTEXTPROC DestroyContext;
-    PFNEGLDESTROYSURFACEPROC DestroySurface;
-    PFNEGLGETCONFIGATTRIBPROC GetConfigAttrib;
-    PFNEGLGETCURRENTDISPLAYPROC GetCurrentDisplay;
-    PFNEGLGETDISPLAYPROC GetDisplay;
-    PFNEGLGETPROCADDRESSPROC GetProcAddress;
-    PFNEGLINITIALIZEPROC Initialize;
-    PFNEGLMAKECURRENTPROC MakeCurrent;
-    PFNEGLSWAPBUFFERSPROC SwapBuffers;
-    PFNEGLTERMINATEPROC Terminate;
-};
-
-static struct segl_vtable segl_vtable_load(void) {
-    void *so_handle = dlopen("libEGL.so", RTLD_LAZY | RTLD_LOCAL);
-    if (so_handle == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            "SEGLAP",
-            "failed to load libEGL.so: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-
-    struct segl_vtable vtable = { 0 };
-    vtable.ChooseConfig = dlsym(so_handle, "eglChooseConfig");
-    if (vtable.ChooseConfig == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglChooseConfig: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.CreateContext = dlsym(so_handle, "eglCreateContext");
-    if (vtable.CreateContext == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglCreateContext: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.CreateWindowSurface = dlsym(so_handle, "eglCreateWindowSurface");
-    if (vtable.CreateWindowSurface == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglCreateWindowSurf: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.DestroyContext = dlsym(so_handle, "eglDestroyContext");
-    if (vtable.DestroyContext == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglDestroyContext: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.DestroySurface = dlsym(so_handle, "eglDestroySurface");
-    if (vtable.DestroySurface == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglDestroySurface: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.GetConfigAttrib = dlsym(so_handle, "eglGetConfigAttrib");
-    if (vtable.GetConfigAttrib == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglGetConfigAttrib: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.GetCurrentDisplay = dlsym(so_handle, "eglGetCurrentDisplay");
-    if (vtable.GetCurrentDisplay == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglGetCurrentDisplay: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.GetDisplay = dlsym(so_handle, "eglGetDisplay");
-    if (vtable.GetDisplay == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglGetDisplay: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.GetProcAddress = dlsym(so_handle, "eglGetProcAddress");
-    if (vtable.GetProcAddress == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglGetProcAddress: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.Initialize = dlsym(so_handle, "eglInitialize");
-    if (vtable.Initialize == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglInitialize: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.MakeCurrent = dlsym(so_handle, "eglMakeCurrent");
-    if (vtable.MakeCurrent == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglMakeCurrent: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.SwapBuffers = dlsym(so_handle, "eglSwapBuffers");
-    if (vtable.SwapBuffers == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglSwapBuffers: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-    vtable.Terminate = dlsym(so_handle, "eglTerminate");
-    if (vtable.Terminate == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load eglTerminate: %s",
-            dlerror()
-        );
-        exit(1);
-    }
-
-    return vtable;
-}
-
-struct segl_ctx {
+struct egl_ctx {
     EGLDisplay display;
     EGLConfig config;
     EGLContext context;
     EGLSurface surface;
 };
 
-static struct segl_ctx segl_ctx_load(
-    struct android_app *app,
-    struct segl_vtable *segl_vtable
-) {
-    struct segl_ctx segl_ctx;
-
-    segl_ctx.display = segl_vtable->GetDisplay(EGL_DEFAULT_DISPLAY);
-    if (segl_ctx.display == EGL_NO_DISPLAY) {
+static void egl_ctx_load(struct egl_ctx *ctx, struct android_app *app) {
+    ctx->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (ctx->display == EGL_NO_DISPLAY) {
         __android_log_print(
             ANDROID_LOG_ERROR,
             SEGL_LOG_ID,
@@ -592,7 +444,7 @@ static struct segl_ctx segl_ctx_load(
 
     EGLint major;
     EGLint minor;
-    if (!segl_vtable->Initialize(segl_ctx.display, &major, &minor)) {
+    if (!eglInitialize(ctx->display, &major, &minor)) {
         __android_log_print(
             ANDROID_LOG_ERROR,
             SEGL_LOG_ID,
@@ -601,7 +453,7 @@ static struct segl_ctx segl_ctx_load(
         exit(1);
     }
 
-    /* NOTE: may wish to require an 8 bit alpha channel as well */
+    /* NOTE: we pick the first 24bit RGB ES2 config */
     const EGLint attribs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_CONFORMANT, EGL_OPENGL_ES2_BIT,
@@ -614,10 +466,10 @@ static struct segl_ctx segl_ctx_load(
     };
     EGLint nconfigs;
     if (
-        !segl_vtable->ChooseConfig(
-            segl_ctx.display,
+        !eglChooseConfig(
+            ctx->display,
             attribs,
-            &segl.config,
+            &ctx->config,
             1,
             &nconfigs
         ) ||
@@ -636,13 +488,13 @@ static struct segl_ctx segl_ctx_load(
         EGL_CONTEXT_MINOR_VERSION, 0,
         EGL_NONE,
     };
-    segl_ctx.context = segl_vtable->CreateContext(
-        segl_ctx.display,
-        segl_ctx.config,
+    ctx->context = eglCreateContext(
+        ctx->display,
+        ctx->config,
         EGL_NO_CONTEXT,
         context_attribs
     );
-    if (segl_ctx.context == EGL_NO_CONTEXT) {
+    if (ctx->context == EGL_NO_CONTEXT) {
         __android_log_print(
             ANDROID_LOG_ERROR,
             SEGL_LOG_ID,
@@ -650,13 +502,13 @@ static struct segl_ctx segl_ctx_load(
         );
         exit(1);
     }
-    segl_ctx.surface = segl_vtable->CreateWindowSurface(
-        segl_ctx.display,
-        segl_ctx.config,
+    ctx->surface = eglCreateWindowSurface(
+        ctx->display,
+        ctx->config,
         app->window,
         NULL
     );
-    if (segl_ctx.surface == EGL_NO_SURFACE) {
+    if (ctx->surface == EGL_NO_SURFACE) {
         __android_log_print(
             ANDROID_LOG_ERROR,
             SEGL_LOG_ID,
@@ -666,11 +518,11 @@ static struct segl_ctx segl_ctx_load(
     }
 
     if (
-        !segl_vtable->MakeCurrent(
-            segl_ctx.display,
-            segl_ctx.surface,
-            segl_ctx.surface,
-            segl_ctx.context
+        !eglMakeCurrent(
+            ctx->display,
+            ctx->surface,
+            ctx->surface,
+            ctx->context
         )
     ) {
         __android_log_print(
@@ -680,87 +532,40 @@ static struct segl_ctx segl_ctx_load(
         );
         exit(1);
     }
-
-    return segl_ctx;
 }
 
-static void segl_ctx_unload(
-    struct segl_ctx *segl_ctx,
-    struct segl_vtable *segl_vtable
-) {
-    if (segl_ctx->display == EGL_NO_DISPLAY) {
+static void egl_ctx_unload(struct egl_ctx *ctx) {
+    if (ctx->display == EGL_NO_DISPLAY) {
         return;
     }
 
-    segl_vtable->MakeCurrent(
-        segl_ctx->display,
+    eglMakeCurrent(
+        ctx->display,
         EGL_NO_SURFACE,
         EGL_NO_SURFACE,
         EGL_NO_CONTEXT
     );
 
-    if (segl_ctx->context != EGL_NO_CONTEXT) {
-        segl_vtable->DestroyContext(segl_ctx->display, segl_ctx->context);
+    if (ctx->context != EGL_NO_CONTEXT) {
+        eglDestroyContext(ctx->display, ctx->context);
     }
 
-    if (segl_ctx->surface != EGL_NO_SURFACE) {
-        segl_vtable->DestroySurface(segl_ctx->display, segl_ctx->surface);
+    if (ctx->surface != EGL_NO_SURFACE) {
+        eglDestroySurface(ctx->display, ctx->surface);
     }
 
-    segl_vtable->Terminate(segl_ctx->display);
+    eglTerminate(ctx->display);
 
-    segl_ctx->display = EGL_NO_DISPLAY;
-    segl_ctx->context = EGL_NO_CONTEXT;
-    segl_ctx->surface = EGL_NO_SURFACE;
+    ctx->display = EGL_NO_DISPLAY;
+    ctx->context = EGL_NO_CONTEXT;
+    ctx->surface = EGL_NO_SURFACE;
 }
 
-struct sgles2_vtable {
-    PFNGLCLEARPROC Clear;
-    PFNGLCLEARCOLORPROC ClearColor;
-    PFNGLVIEWPORTPROC Viewport;
+static struct egl_ctx egl_ctx = {
+    .display = EGL_NO_DISPLAY,
+    .context = EGL_NO_CONTEXT,
+    .surface = EGL_NO_SURFACE,
 };
-
-static struct sgles2_vtable sgles2_vtable_load(struct segl_vtable *segl_vtable) {
-    struct sgles2_vtable vtable = { 0 };
-
-    vtable.Clear = (PFNGLCLEARPROC)segl_vtable->GetProcAddress("glClear");
-    if (vtable.Clear == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load glClear"
-        );
-        exit(1);
-    }
-    vtable.ClearColor = (PFNGLCLEARCOLORPROC)segl_vtable->GetProcAddress(
-        "glClearColor"
-    );
-    if (vtable.ClearColor == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load glClearColor"
-        );
-        exit(1);
-    }
-    vtable.Viewport = (PFNGLVIEWPORTPROC)segl_vtable->GetProcAddress(
-        "glViewport"
-    );
-    if (vtable.Viewport == NULL) {
-        __android_log_print(
-            ANDROID_LOG_ERROR,
-            SEGL_LOG_ID,
-            "failed to load glViewport"
-        );
-        exit(1);
-    }
-
-    return vtable;
-}
-
-static struct segl_vtable egl;
-static struct segl_ctx egl_ctx;
-static struct sgles2_vtable gl;
 
 static void handle_cmd(struct android_app *app, int32_t cmd) {
     switch (cmd) {
@@ -770,10 +575,11 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_INIT_WINDOW"
             );
-            if (egl_ctx.display != EGL_NO_DISPLAY) {
-                break;
+
+            if (egl_ctx.display == EGL_NO_DISPLAY) {
+                egl_ctx_load(&egl_ctx, app);
             }
-            egl_ctx = segl_ctx_load(app, &egl);
+
             break;
         case APP_CMD_TERM_WINDOW:
             __android_log_print(
@@ -781,10 +587,11 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_TERM_WINDOW"
             );
-            if (egl_ctx.display == EGL_NO_DISPLAY) {
-                break;
+
+            if (egl_ctx.display != EGL_NO_DISPLAY) {
+                egl_ctx_unload(&egl_ctx);
             }
-            segl_ctx_unload(&egl_ctx, &egl);
+
             break;
         case APP_CMD_DESTROY:
             __android_log_print(
@@ -792,7 +599,9 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 SEGL_LOG_ID,
                 "APP_CMD_DESTROY"
             );
+
             /* app has been closed */
+
             break;
         default:
             break;
@@ -801,6 +610,7 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
 
 static int32_t handle_input(struct android_app *app, AInputEvent *event) {
     /* handle touch and keyboard input */
+
     return 0;
 }
 
@@ -808,50 +618,28 @@ static int64_t time_since_ns(struct timespec end, struct timespec start) {
     int64_t seconds = (int64_t)end.tv_sec - (int64_t)start.tv_sec;
     int64_t sec_diff = seconds * 1000L * 1000L * 1000L;
     int64_t nsec_diff = (int64_t)end.tv_nsec - (int64_t)start.tv_nsec;
+
     return sec_diff + nsec_diff;
 }
 
 void android_main(struct android_app *app) {
     __android_log_print(ANDROID_LOG_INFO, SEGL_LOG_ID, "android_main");
+
     app->onAppCmd = handle_cmd;
     app->onInputEvent = handle_input;
-
-    egl = segl_vtable_load();
-    gl = sgles2_vtable_load(&egl);
-
-    float red = 0.66f;
-    bool red_flip = false;
-    float green = 0.33f;
-    bool green_flip = false;
-    float blue = 0.0f;
-    bool blue_flip = false;
 
     int64_t elapsed = 0;
     struct timespec last;
     clock_gettime(CLOCK_MONOTONIC, &last);
+
     for (;;) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         elapsed += time_since_ns(now, last);
         last = now;
 
-        while (elapsed >= TIMESTEP) {
-            red += 0.005f;
-            green += 0.006f;
-            blue += 0.007f;
-            if (red >= 1.0f) {
-                red -= 1.0f;
-                red_flip = !red_flip;
-            }
-            if (green >= 1.0f) {
-                green -= 1.0f;
-                green_flip = !green_flip;
-            }
-            if (blue >= 1.0f) {
-                blue -= 1.0f;
-                blue_flip = !blue_flip;
-            }
-            elapsed -= TIMESTEP;
+        while (elapsed >= PERIOD) {
+            elapsed -= PERIOD;
         }
 
         int events;
@@ -867,57 +655,50 @@ void android_main(struct android_app *app) {
         }
 
         if (egl_ctx.display == EGL_NO_DISPLAY) {
-            const struct timespec duration = { .tv_nsec = TIMESTEP };
+            const struct timespec duration = {
+                .tv_nsec = 32L * 1000L * 1000L,
+            };
             nanosleep(&duration, NULL);
-            continue;
+        } else {
+            int width = ANativeWindow_getWidth(app->window);
+            int height = ANativeWindow_getHeight(app->window);
+
+            float t = (float)elapsed / NSEC_PER_SEC_F;
+
+            glViewport(0, 0, width, height);
+            glClearColor(
+                0.5f * (1.0f + cosf(t)),
+                0.5f * (1.0f + sinf(t)),
+                0.5f * (1.0f - cosf(t)),
+                1.0f
+            );
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            eglSwapBuffers(egl_ctx.display, egl_ctx.surface);
         }
-
-        int width = ANativeWindow_getWidth(app->window);
-        int height = ANativeWindow_getHeight(app->window);
-
-        gl.Viewport(0, 0, width, height);
-        gl.ClearColor(
-            red_flip ? 1.0f - red : red,
-            green_flip ? 1.0f - green : green,
-            blue_flip ? 1.0f - blue : blue,
-            1.0f
-        );
-        gl.Clear(GL_COLOR_BUFFER_BIT);
-
-        egl.SwapBuffers(egl_ctx.display, egl_ctx.surface);
     }
 }
 ```
 
-The `segl_vtable_load` function loads `libEGL.so`, then constructs a
-[vtable][20]
-containing each EGL 1.0 API function needed for this demo.
-The `segl_ctx_load` function
-uses the EGL vtable to create an OpenGL ES 2.0 context and
+The `egl_ctx_load` function
+uses the EGL API to create an OpenGL ES 2.0 context and
 an EGL window surface corresponding to the Android app window.
-The `segl_ctx_unload` function destroys the EGL context and
+The `egl_ctx_unload` function destroys the EGL context and
 surface.
 
-In order to draw anything, we'll need to load a second
-vtable containing OpenGL functions.
-The `sgles2_vtable_load` function loads such
-a table using `GetProcAddress` from the EGL vtable.
-
-**Note:** In a real project we should probably load the
-full EGL 1.0 and OpenGL ES 2.0 APIs (or
-whichever API versions we choose).
-
 The loop in `android_main` clears the screen with a varying color.
-The `handle_cmd` function loads an EGL context on
+The `handle_cmd` function creates an EGL context on
 `APP_CMD_INIT_WINDOW` events, and destroys the context
 on `APP_CMD_TERM_WINDOW` events.
 
-**Note:** The `INIT_WINDOW`/`TERM_WINDOW` events are also
-sent when the app is minimized/resumed, respectively.
+**Note:** The `INIT_WINDOW`/`TERM_WINDOW` events are sent
+when the app is opened/closed, and also
+when the app is paused/resumed.
 When `TERM_WINDOW` is handled, it is important to release
 all OpenGL context state (shaders, textures, vertex buffers, etc.)
-before the call to `segl_ctx_unload`. Then, when `INIT_WINDOW` is handled,
-the OpenGL state must be re-constructed.
+before the call to `egl_ctx_unload`. Then, when `INIT_WINDOW` is
+handled, the OpenGL state should be re-constructed from the
+application state.
 
 Going through the same process as before, we can
 compile our shared library, re-package `seglapp.apk`, and install
@@ -930,7 +711,7 @@ $ clang --target=aarch64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
-    -lm -ldl -landroid -llog
+    -lm -landroid -llog -lEGL -lGLESv2
 $ cd ./build
 $ zip -D4r ../temp2.apk .
 $ zip -D0r ../temp2.apk ./resources.arsc ./AndroidManifest.xml
@@ -946,7 +727,7 @@ $ adb install seglapp.apk
 Running `seglapp` should now display a varying solid color
 background which can be seamlessly suspended and resumed.
 
-## Multi-architecture builds
+## Targeting multiple architectures
 
 The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
@@ -959,19 +740,19 @@ $ clang --target=armv7a-linux-androideabi22 \
     -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/armeabi-v7a/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
-    -lm -ldl -landroid -llog
+    -lm -landroid -llog -lEGL -lGLESv2
 $ mkdir -p ./build/lib/x86
 $ clang --target=i686-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/x86/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
-    -lm -ldl -landroid -llog
+    -lm -landroid -llog -lEGL -lGLESv2
 $ mkdir -p ./build/lib/x86_64
 $ clang --target=x86_64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
     -shared -fPIC -o ./build/lib/x86_64/libseglapp.so \
     ./src/main.c ./src/android_native_app_glue.c \
-    -lm -ldl -landroid -llog
+    -lm -landroid -llog -lEGL -lGLESv2
 # then proceed with re-packaging as usual
 ```
 
@@ -981,21 +762,18 @@ other architectures with [emulators][30].
 ## Next steps
 
 Our OpenGL example was very disappointing, we didn't even draw a triangle!
-Loading the rest of the OpenGL ES API into the vtable, adding a basic
-shader pipeline, and pushing some vertices to the GPU
+Adding a basic shader pipeline and pushing some vertices to the GPU
 should be priority number one.
 
-We also haven't handled any input in our `handle_input` function,
-the next step there is to
+We also haven't handled any input in our `handle_input` function, take a
 look at the Android NDK [input documentation][7].
 We used the `ANativeWindow` API to get the width and height of the
 application window, but there is [more functionality available][10].
 There are also a
 few more `APP_CMD` events that may be useful, so it might be good
-to read through the [native app glue docs][8] as well (and look
-through the `android_native_app_glue.c` source file).
+to read through the [native app glue docs][8].
 
-A finished version of the example in this article is available on [GitHub][9].
+A completed version of the example in this article is available on [GitHub][9].
 
 [1]: https://github.com/cnlohr/rawdrawandroid
 [2]: https://github.com/permutationlock/libavengraph
@@ -1030,3 +808,5 @@ A finished version of the example in this article is available on [GitHub][9].
 [31]: https://www.man7.org/linux/man-pages/man3/pthread_create.3.html
 [32]: https://github.com/openjdk/jdk/tree/master
 [33]: https://developer.android.com/tools/aapt2
+[34]: https://developer.android.com/reference/android/app/NativeActivity
+[35]: https://registry.khronos.org/EGL/sdk/docs/man/html/eglGetProcAddress.xhtml

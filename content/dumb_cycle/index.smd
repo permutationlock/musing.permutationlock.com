@@ -1,5 +1,5 @@
 ---
-.title = "Dumb Cycle",
+.title = "DumbCycle",
 .date = @date("2024-04-12T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -12,7 +12,7 @@
 > *What is the easiest way to draw pixels to the screen on a modern Linux system?*
 
 I have had this question bouncing around in the back of my mind for a long time.
-Some time ago I made a few tiny applications that displayed images using the `/dev/fb0`
+A while ago I made a tiny application that displayed images using the `/dev/fb0`
 device. Unfortunately, [fbdev][1] is a legacy subsystem that won't always be present.
 Fortunately, the modern [Direct Rendering Manager][2] subsystem provides corresponding
 functionality via "dumb buffer" objects.
@@ -29,7 +29,7 @@ it had to:
  3. link with a basic `x86_64` assembly runtime (no `libc` or other libraries).
 
 The third restriction made C preprocesser directives mostly unnecessary,
-so none were be used (i.e. `#include` and `#define` were not allowed).
+so none were used (i.e. `#include` and `#define` were not allowed).
 That was undoubtedly a bit stupid, but I refer you to the project title.
 
 Code for the finished game is available on [GitHub][3].
