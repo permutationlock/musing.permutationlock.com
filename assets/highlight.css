@@ -65,3 +65,23 @@ code.c .string {
 code.c .comment{
   color: var(--comment);
 }
+
+code.java .keyword {
+  color: var(--keyword);
+}
+
+code.java .type {
+  color: var(--type);
+}
+
+code.java .number {
+  color: var(--number);
+}
+
+code.java .string {
+  color: var(--string);
+}
+
+code.java .comment{
+  color: var(--comment);
+}

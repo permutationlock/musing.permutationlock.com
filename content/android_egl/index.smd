@@ -13,11 +13,15 @@
 >
 > *I told you, we don't support that.*
 
-The [rawdraw android][1] project shows that it is possible
-to build fully functional Android apps using only C and command-line
-tools. In this article we'll break down the basic
-steps required to package a minimal [OpenGL ES][13]
-application from scratch, and then install it on my Pixel 7a phone.
+I spend a lot of time writing C applications, but until
+recently I had never built anything for my Pixel 7a phone. I always strive to
+have as few build dependencies as possible, and the complexity of
+Android Studio and the associated build system(s) always scared me off.
+
+Then I discovered the wonderful [rawdraw android][1] project, which
+shows that it is possible to build a fully functional app using only
+a few command-line tools. In this article we'll write an Android app together
+from scratch using C, and break down the basic steps required to package an APK.
 
 ## Build environment
 
@@ -223,8 +227,7 @@ and
 [`android_native_app_glue.c`](https://android.googlesource.com/platform/ndk/+/refs/heads/main/sources/android/native_app_glue/android_native_app_glue.c)
 in the `sources/android/` subdirectory of the NDK.
 The glue exports
-the `ANativeActivity_onCreate` function that will be called through
-the [JNI][21] on startup. This
+the `ANativeActivity_onCreate` function that will be called on startup. This
 sets up callbacks to allow our C code to respond
 to events, then uses [`pthread_create`][31] to
 start a thread that calls `android_main`. The
@@ -432,6 +435,10 @@ struct egl_ctx {
 };
 
 static void egl_ctx_load(struct egl_ctx *ctx, struct android_app *app) {
+    if (ctx->display != EGL_NO_DISPLAY) {
+        return;
+    }
+
     ctx->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (ctx->display == EGL_NO_DISPLAY) {
         __android_log_print(
@@ -576,9 +583,7 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 "APP_CMD_INIT_WINDOW"
             );
 
-            if (egl_ctx.display == EGL_NO_DISPLAY) {
-                egl_ctx_load(&egl_ctx, app);
-            }
+            egl_ctx_load(&egl_ctx, app);
 
             break;
         case APP_CMD_TERM_WINDOW:
@@ -588,9 +593,7 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
                 "APP_CMD_TERM_WINDOW"
             );
 
-            if (egl_ctx.display != EGL_NO_DISPLAY) {
-                egl_ctx_unload(&egl_ctx);
-            }
+            egl_ctx_unload(&egl_ctx);
 
             break;
         case APP_CMD_DESTROY:
@@ -680,19 +683,13 @@ void android_main(struct android_app *app) {
 }
 ```
 
-The `egl_ctx_load` function
-uses the EGL API to create an OpenGL ES 2.0 context and
-an EGL window surface corresponding to the Android app window.
-The `egl_ctx_unload` function destroys the EGL context and
-surface.
-
 The loop in `android_main` clears the screen with a varying color.
-The `handle_cmd` function creates an EGL context on
-`APP_CMD_INIT_WINDOW` events, and destroys the context
-on `APP_CMD_TERM_WINDOW` events.
+The `handle_cmd` function creates an EGL surface and OpenGL context
+on an `APP_CMD_INIT_WINDOW` event, and destroys them
+on an `APP_CMD_TERM_WINDOW` event.
 
 **Note:** The `INIT_WINDOW`/`TERM_WINDOW` events are sent
-when the app is opened/closed, and also
+when the app is opened/closed, but also
 when the app is paused/resumed.
 When `TERM_WINDOW` is handled, it is important to release
 all OpenGL context state (shaders, textures, vertex buffers, etc.)
@@ -727,11 +724,375 @@ $ adb install seglapp.apk
 Running `seglapp` should now display a varying solid color
 background which can be seamlessly suspended and resumed.
 
+## Fullscreen mode and Java function calls
+
+You may have noticed that our OpenGL colored background is drawn behind the
+default Android UI decorations. The NDK does not provide a C API to hide these decorations,
+or even determine the size and position of each element. In this section we'll learn
+how to use the [Java Native Interface (JNI)][21] and put our app in fullscreen "immersive" mode.
+
+### The Java virtual machine and native interface
+
+Every call across the JNI boundary must pass a pointer to the JNI environment
+associated with the current thread. When a
+Java thread calls a native function, the associated environment is automatically
+provided by the [Java Virtual Machine (JVM)][36]. Our `android_main` function, however, is running
+on a `pthread` created without the JVM's knowledge. Therefore
+we must first "attach" our thread to the JVM the app is running in.
+
+```c
+/* ... */
+
+#include <jni.h>
+
+/* ... */
+
+void android_main(struct android_app *app) {
+    __android_log_print(ANDROID_LOG_INFO, SEGL_LOG_ID, "android_main");
+
+    app->onAppCmd = handle_cmd;
+    app->onInputEvent = handle_input;
+
+    /* NOTE: JavaVM and JNIEnv are pointer types */
+    JavaVM jvm = *app->activity->vm;
+    JNIEnv *envptr = NULL;
+    jvm->AttachCurrentThread(&jvm, &envptr, NULL);
+
+    JNIEnv env = *envptr;
+
+    /* JNI calls to enable fullscreen */
+
+    jvm->DetachCurrentThread(&jvm);
+
+    for (;;) {
+        /* ... */
+    }
+}
+```
+
+### Hiding system bars
+
+To hide the system bars and display in fullscreen, a Java app would
+execute the code shown below.
+
+```java
+Window window = getWindow();
+View decorView = window.getDecorView();
+
+decorView.setSystemUiVisibility(
+    // make system bars transparent when shown
+    View.SYSTEM_UI_FLAG_LOW_PROFILE |
+
+    // hide system bars
+    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+
+    // make content fullscreen
+    View.SYSTEM_UI_FLAG_FULLSCREEN |
+
+    // re-hide system bars after timeout
+    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+
+    // don't resize layout when showing system bars
+    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+);
+
+window.addFlags(
+    // full screen window
+    WindowManager.LayoutParams.FLAG_FULLSCREEN |
+
+    // don't go to sleep while app is open
+    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+
+    // maintain hardware acceleration
+    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED |
+
+    // don't display behind cutouts (e.g. front camera)
+    // --> if you do want cutouts, use `_NO_LIMITS`
+    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+);
+```
+
+**Note:** The method above is technically deprecated,
+but it should still work going into the future. See [here][46] for the
+modern API.
+
+The C code to accomplish the same thing through the JNI is simple, but verbose. We
+first need to look up each Java class with [`FindClass`][37]. Then we'll
+look up each method and field with [`GetMethodID`][38], [`GetStaticMethodID`][39],
+[`GetFieldID`][40], and [`GetStaticFieldID`][41]. Finally, we'll
+call methods and access fields with [`Call<type>Method`][42],
+[`CallStatic<type>Method`][43], [`Get<type>Field`][44], and
+[`GetStatic<type>Field`][45].
+
+```c
+    /* ... */
+
+    /* NOTE: JavaVM and JNIEnv are pointer types */
+    JavaVM jvm = *app->activity->vm;
+    JNIEnv *envptr = NULL;
+    jvm->AttachCurrentThread(app->activity->vm, &envptr, NULL);
+
+    JNIEnv env = *envptr;
+
+    jclass av_NativeActivity = env->FindClass(
+        envptr,
+        "android/app/NativeActivity"
+    );
+    jclass av_Window = env->FindClass(envptr, "android/view/Window");
+    jclass av_View = env->FindClass(envptr, "android/view/View");
+    jclass avwm_LayoutParams = env->FindClass(
+        envptr,
+        "android/view/WindowManager$LayoutParams"
+    );
+
+    jmethodID av_NativeActivity_getWindow = env->GetMethodID(
+        envptr,
+        av_NativeActivity,
+        "getWindow",
+        "()Landroid/view/Window;"
+    );
+    jmethodID av_Window_getDecorView = env->GetMethodID(
+        envptr,
+        av_Window,
+        "getDecorView",
+        "()Landroid/view/View;"
+    );
+    jmethodID av_Window_addFlags = env->GetMethodID(
+        envptr,
+        av_Window,
+        "addFlags",
+        "(I)V"
+    );
+    jmethodID av_View_setSystemUiVisibility = env->GetMethodID(
+        envptr,
+        av_View,
+        "setSystemUiVisibility",
+        "(I)V"
+    );
+
+    jfieldID av_View_SYSTEM_UI_FLAG_LOW_PROFILE =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_LOW_PROFILE",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_HIDE_NAVIGATION =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_HIDE_NAVIGATION",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_FULLSCREEN =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_FULLSCREEN",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_IMMERSIVE_STICKY =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_IMMERSIVE_STICKY",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION",
+            "I"
+        );
+    jfieldID av_View_SYSTEM_UI_FLAG_LAYOUT_STABLE =
+        env->GetStaticFieldID(
+            envptr,
+            av_View,
+            "SYSTEM_UI_FLAG_LAYOUT_STABLE",
+            "I"
+        );
+    jfieldID avwm_LayoutParams_FLAG_FULLSCREEN =
+        env->GetStaticFieldID(
+            envptr,
+            avwm_LayoutParams,
+            "FLAG_FULLSCREEN",
+            "I"
+        );
+    jfieldID avwm_LayoutParams_FLAG_KEEP_SCREEN_ON =
+        env->GetStaticFieldID(
+            envptr,
+            avwm_LayoutParams,
+            "FLAG_KEEP_SCREEN_ON",
+            "I"
+        );
+    jfieldID avwm_LayoutParams_FLAG_HARDWARE_ACCELERATED =
+        env->GetStaticFieldID(
+            envptr,
+            avwm_LayoutParams,
+            "FLAG_HARDWARE_ACCELERATED",
+            "I"
+        );
+    jfieldID avwm_LayoutParams_FLAG_LAYOUT_IN_SCREEN =
+        env->GetStaticFieldID(
+            envptr,
+            avwm_LayoutParams,
+            "FLAG_LAYOUT_IN_SCREEN",
+            "I"
+        );
+
+    /* Window window = getWindow(); */
+    jobject window = env->CallObjectMethod(
+        envptr,
+        app->activity->clazz,
+        av_NativeActivity_getWindow
+    );
+
+    /* View decorView = window.getDecorView(); */
+    jobject decorView = env->CallObjectMethod(
+        envptr,
+        window,
+        av_Window_getDecorView
+    );
+
+    /*
+     * decorView.setSystemUiVisibility(
+     *     View.SYSTEM_UI_FLAG_LOW_PROFILE |
+     *     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+     *     View.SYSTEM_UI_FLAG_FULLSCREEN |
+     *     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+     *     View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+     *     View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+     *     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+     * );
+    */
+    env->CallVoidMethod(
+        envptr,
+        decorView,
+        av_View_setSystemUiVisibility,
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_LOW_PROFILE
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_FULLSCREEN
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            av_View,
+            av_View_SYSTEM_UI_FLAG_LAYOUT_STABLE
+        )
+    );
+
+    /*
+     * window.addFlags(
+     *     WindowManager.LayoutParams.FLAG_FULLSCREEN |
+     *     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+     *     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED |
+     *     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+     * );
+    */
+    env->CallVoidMethod(
+        envptr,
+        window,
+        av_Window_addFlags,
+        env->GetStaticIntField(
+            envptr,
+            avwm_LayoutParams,
+            avwm_LayoutParams_FLAG_FULLSCREEN
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            avwm_LayoutParams,
+            avwm_LayoutParams_FLAG_KEEP_SCREEN_ON
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            avwm_LayoutParams,
+            avwm_LayoutParams_FLAG_HARDWARE_ACCELERATED
+        ) |
+        env->GetStaticIntField(
+            envptr,
+            avwm_LayoutParams,
+            avwm_LayoutParams_FLAG_LAYOUT_IN_SCREEN
+        )
+    );
+
+    jvm->DetachCurrentThread(app->activity->vm);
+
+    /* ... */
+```
+
+If we re-package the `.apk`, then install and run it on our device,
+the colors should now fill the full screen. Swiping from the
+edge of the screen will temporarily bring back the system bars.
+
+### Garbage collection and lifetimes
+
+Above we attached our thread to the JVM, executed some JNI calls to enter fullscreen mode,
+then detached and never used JNI calls again in `android_main`.
+In some situations, however,
+it is useful to remain attached and continue making JNI calls
+throughout the
+app's lifetime.
+In such cases it's useful to understand how references and lifetimes work
+with regards to the Java garbage collector.
+
+The lifetime of each Java object
+depends on the existence of references to that object. When we call
+`getWindow` with `CallObjectMethod`,
+the `jobject` returned is a [local reference][47]
+to the given `Window`. In the eyes of the JVM garbage collector, that local
+reference will continue to exist until we detach our thread.
+For our use case above, this would be completely fine even if we
+didn't immediately detach: `window` and `decorView` are
+single `jobject` references to objects will already live for the entirety
+of our application.
+
+Suppose, however, that we instead made
+JNI calls within our main `for` loop. Each iteration, any
+local references created would "leak" and continue to
+exist on the JVM side, even after the `jobject` stack value went out of scope. In
+such situations the [`DeleteLocalReference`][48] function can be used to
+inform the JVM when a local reference is no longer valid.
+
 ## Targeting multiple architectures
 
 The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
-is very simple: add a separate sub-directory in `build/lib/` for
+is very simple: add a separate subdirectory in `build/lib/` for
 each architecture! Below we add support for 32 bit ARM, x86, and x86_64.
 
 ```bash
@@ -765,12 +1126,11 @@ Our OpenGL example was very disappointing, we didn't even draw a triangle!
 Adding a basic shader pipeline and pushing some vertices to the GPU
 should be priority number one.
 
-We also haven't handled any input in our `handle_input` function, take a
+We also haven't handled any input in our `handle_input` function yet, take a
 look at the Android NDK [input documentation][7].
-We used the `ANativeWindow` API to get the width and height of the
+The `ANativeWindow` API was used to get the width and height of the
 application window, but there is [more functionality available][10].
-There are also a
-few more `APP_CMD` events that may be useful, so it might be good
+There are also a few more `APP_CMD` events, so it might be useful
 to read through the [native app glue docs][8].
 
 A completed version of the example in this article is available on [GitHub][9].
@@ -810,3 +1170,16 @@ A completed version of the example in this article is available on [GitHub][9].
 [33]: https://developer.android.com/tools/aapt2
 [34]: https://developer.android.com/reference/android/app/NativeActivity
 [35]: https://registry.khronos.org/EGL/sdk/docs/man/html/eglGetProcAddress.xhtml
+[36]: https://en.wikipedia.org/wiki/Java_virtual_machine
+[37]: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#Call_type_Method_routines
+[38]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getmethodid
+[39]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstaticmethodid
+[40]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getfieldid
+[41]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstaticfieldid
+[42]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines
+[43]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines
+[44]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#gettypefield-routines
+[45]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstatictypefield-routines
+[46]: https://developer.android.com/develop/ui/views/layout/immersive#java
+[47]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/design.html#global-and-local-references
+[48]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#deletelocalref
