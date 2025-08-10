@@ -13,15 +13,17 @@
 >
 > *I told you, we don't support that.*
 
-I spend a lot of time writing C applications, but until
-recently I had never built anything for my Pixel 7a phone. I always strive to
-have as few build dependencies as possible, and the complexity of
-Android Studio and the associated build system(s) always scared me off.
+I make a lot of small C applications, but I'd never
+built something for my Pixel 7a phone. I prefer to
+have very few development dependencies, and the complexity of
+Android Studio and its associated build system(s) scared me off.
+I had to use them in university and I did not enjoy the experience.
 
 Then I discovered the wonderful [rawdraw android][1] project, which
-shows that it is possible to build a fully functional app using only
-a few command-line tools. In this article we'll write an Android app together
-from scratch using C, and break down the basic steps required to package an APK.
+shows that, in fact, we can build apps using only a few command-line tools.
+In this article we'll start from scratch and go through the
+steps to create a simple [OpenGL][13] C app, package it
+in a `.apk` file, and install it on a device.
 
 ## Build environment
 
@@ -724,21 +726,54 @@ $ adb install seglapp.apk
 Running `seglapp` should now display a varying solid color
 background which can be seamlessly suspended and resumed.
 
-## Fullscreen mode and Java function calls
+## Targeting multiple architectures
+
+The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
+Fortunately, the process to package a `.apk` for multiple architectures
+is very simple: add a separate subdirectory in `build/lib/` for
+each target! Below we add support for 32 bit ARM, x86, and x86_64.
+
+```bash
+$ mkdir -p ./build/lib/armeabi-v7a
+$ clang --target=armv7a-linux-androideabi22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/armeabi-v7a/libseglapp.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+$ mkdir -p ./build/lib/x86
+$ clang --target=i686-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86/libseglapp.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+$ mkdir -p ./build/lib/x86_64
+$ clang --target=x86_64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86_64/libseglapp.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+# then proceed with re-packaging as usual
+```
+
+The devices I own are all `aarch64`, but I've tested
+other architectures with [emulators][30].
+
+## Fullscreen mode and the Java API
 
 You may have noticed that our OpenGL colored background is drawn behind the
 default Android UI decorations. The NDK does not provide a C API to hide these decorations,
 or even determine the size and position of each element. In this section we'll learn
-how to use the [Java Native Interface (JNI)][21] and put our app in fullscreen "immersive" mode.
+how to use the [Java Native Interface (JNI)][21] to access
+the Android Java API and put our app in fullscreen "immersive" mode.
 
-### The Java virtual machine and native interface
+### Calling Java code from C
 
 Every call across the JNI boundary must pass a pointer to the JNI environment
 associated with the current thread. When a
 Java thread calls a native function, the associated environment is automatically
 provided by the [Java Virtual Machine (JVM)][36]. Our `android_main` function, however, is running
 on a `pthread` created without the JVM's knowledge. Therefore
-we must first "attach" our thread to the JVM the app is running in.
+we must first "attach" our thread to the JVM that our app is running in.
 
 ```c
 /* ... */
@@ -792,7 +827,7 @@ decorView.setSystemUiVisibility(
     // re-hide system bars after timeout
     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
 
-    // don't resize layout when showing system bars
+    // don't resize layout when showing/hiding system bars
     View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
     View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -802,15 +837,11 @@ window.addFlags(
     // full screen window
     WindowManager.LayoutParams.FLAG_FULLSCREEN |
 
-    // don't go to sleep while app is open
+    // don't go to sleep while our app is open
     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
 
-    // maintain hardware acceleration
-    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED |
-
-    // don't display behind cutouts (e.g. front camera)
-    // --> if you do want cutouts, use `_NO_LIMITS`
-    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+    // request/maintain hardware acceleration
+    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
 );
 ```
 
@@ -942,13 +973,6 @@ call methods and access fields with [`Call<type>Method`][42],
             "FLAG_HARDWARE_ACCELERATED",
             "I"
         );
-    jfieldID avwm_LayoutParams_FLAG_LAYOUT_IN_SCREEN =
-        env->GetStaticFieldID(
-            envptr,
-            avwm_LayoutParams,
-            "FLAG_LAYOUT_IN_SCREEN",
-            "I"
-        );
 
     /* Window window = getWindow(); */
     jobject window = env->CallObjectMethod(
@@ -1020,8 +1044,7 @@ call methods and access fields with [`Call<type>Method`][42],
      * window.addFlags(
      *     WindowManager.LayoutParams.FLAG_FULLSCREEN |
      *     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
-     *     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED |
-     *     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+     *     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
      * );
     */
     env->CallVoidMethod(
@@ -1042,11 +1065,6 @@ call methods and access fields with [`Call<type>Method`][42],
             envptr,
             avwm_LayoutParams,
             avwm_LayoutParams_FLAG_HARDWARE_ACCELERATED
-        ) |
-        env->GetStaticIntField(
-            envptr,
-            avwm_LayoutParams,
-            avwm_LayoutParams_FLAG_LAYOUT_IN_SCREEN
         )
     );
 
@@ -1077,8 +1095,8 @@ the `jobject` returned is a [local reference][47]
 to the given `Window`. In the eyes of the JVM garbage collector, that local
 reference will continue to exist until we detach our thread.
 For our use case above, this would be completely fine even if we
-didn't immediately detach: `window` and `decorView` are
-single `jobject` references to objects will already live for the entirety
+didn't immediately detach: `window` and `decorView`
+reference to objects that already live for the entirety
 of our application.
 
 Suppose, however, that we instead made
@@ -1087,38 +1105,6 @@ local references created would "leak" and continue to
 exist on the JVM side, even after the `jobject` stack value went out of scope. In
 such situations the [`DeleteLocalReference`][48] function can be used to
 inform the JVM when a local reference is no longer valid.
-
-## Targeting multiple architectures
-
-The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
-Fortunately, the process to package a `.apk` for multiple architectures
-is very simple: add a separate subdirectory in `build/lib/` for
-each architecture! Below we add support for 32 bit ARM, x86, and x86_64.
-
-```bash
-$ mkdir -p ./build/lib/armeabi-v7a
-$ clang --target=armv7a-linux-androideabi22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/armeabi-v7a/libseglapp.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-$ mkdir -p ./build/lib/x86
-$ clang --target=i686-linux-android22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86/libseglapp.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-$ mkdir -p ./build/lib/x86_64
-$ clang --target=x86_64-linux-android22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86_64/libseglapp.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-# then proceed with re-packaging as usual
-```
-
-The devices I own are all `aarch64`, but I've tested
-other architectures with [emulators][30].
 
 ## Next steps
 
