@@ -13,17 +13,19 @@
 >
 > *I told you, we don't support that.*
 
-I make a lot of small C applications, but I'd never
-built something for my Pixel 7a phone. I prefer to
-have very few development dependencies, and the complexity of
-Android Studio and its associated build system(s) scared me off.
-I had to use them in university and I did not enjoy the experience.
+Recently, I set out find a simple way to package my C and OpenGL
+desktop apps into `.apk` files that would run on my Pixel 7a phone.
+I am a dependency minimalist, so I wanted to avoid the Android
+Studio IDE and its associated build systems at all costs.
 
-Then I discovered the wonderful [rawdraw android][1] project, which
-shows that, in fact, we can build apps using only a few command-line tools.
-In this article we'll start from scratch and go through the
-steps to create a simple [OpenGL][13] C app, package it
-in a `.apk` file, and install it on a device.
+The [rawdraw][1] project is a C app framework that only depends on a
+few tools from the Android SDK. While I wasn't interested
+in the framework itself, the contained `Makefile` was a
+proof-of-concept of exactly the command-line build process that I was after.
+
+In this article I'll walk through how to install the necessary SDK tools,
+write a minimal OpenGL app in C, and package an Android `.apk` file
+to be installed on a device.
 
 ## Build environment
 
@@ -184,7 +186,7 @@ would need to change; see the [app manifest documentation][29].
 
 The `template/res/mipmap/icon.png` can be any square `.png` file, e.g. the [`2x2`
 square from
-rawdraw android](https://github.com/cnlohr/rawdrawandroid/blob/master/Sources/res/mipmap/icon.png).
+rawdraw](https://github.com/cnlohr/rawdrawandroid/blob/master/Sources/res/mipmap/icon.png).
 Using `aapt` we may now package our
 initial `.apk`.
 
@@ -846,7 +848,7 @@ window.addFlags(
 ```
 
 **Note:** The method above is technically deprecated,
-but it should still work going into the future. See [here][46] for the
+but it should still work well into the future. See [here][46] for the
 modern API.
 
 The C code to accomplish the same thing through the JNI is simple, but verbose. We
@@ -1083,28 +1085,20 @@ Above we attached our thread to the JVM, executed some JNI calls to enter fullsc
 then detached and never used JNI calls again in `android_main`.
 In some situations, however,
 it is useful to remain attached and continue making JNI calls
-throughout the
-app's lifetime.
+throughout an app's lifetime.
 In such cases it's useful to understand how references and lifetimes work
 with regards to the Java garbage collector.
 
-The lifetime of each Java object
-depends on the existence of references to that object. When we call
-`getWindow` with `CallObjectMethod`,
-the `jobject` returned is a [local reference][47]
-to the given `Window`. In the eyes of the JVM garbage collector, that local
-reference will continue to exist until we detach our thread.
-For our use case above, this would be completely fine even if we
-didn't immediately detach: `window` and `decorView`
-reference to objects that already live for the entirety
-of our application.
-
-Suppose, however, that we instead made
-JNI calls within our main `for` loop. Each iteration, any
-local references created would "leak" and continue to
-exist on the JVM side, even after the `jobject` stack value went out of scope. In
-such situations the [`DeleteLocalReference`][48] function can be used to
-inform the JVM when a local reference is no longer valid.
+The lifetime of a Java object
+depends on references to that object. Each
+`jobject`, `jclass`, `jstring`, or `jarray` value returned
+from a JNI call is [local reference][47]. The JNI environment
+may only have space for 16 local references by default, but
+[`EnsureLocalCapacity`][51] can reserve more space.
+The JVM has no knowledge of C scopes or stack
+variable lifetimes, so each local reference exists [until the thread
+is detached][50]. The [`DeleteLocalReference`][48] function
+should be used when a reference is no longer needed.
 
 ## Next steps
 
@@ -1112,14 +1106,13 @@ Our OpenGL example was very disappointing, we didn't even draw a triangle!
 Adding a basic shader pipeline and pushing some vertices to the GPU
 should be priority number one.
 
-We also haven't handled any input in our `handle_input` function yet, take a
-look at the Android NDK [input documentation][7].
-The `ANativeWindow` API was used to get the width and height of the
-application window, but there is [more functionality available][10].
-There are also a few more `APP_CMD` events, so it might be useful
-to read through the [native app glue docs][8].
+We haven't handled any input in our `handle_input` function yet, take a
+look at the NDK [input documentation][7].
+It also might be useful to read through the [native app glue docs][8].
 
-A completed version of the example in this article is available on [GitHub][9].
+To package asset files, we can add a `build/asset/` directory and
+load files using the [AAssetManager API][49] with `app->activity.assetManager`.
+See [GitHub][9] for a complete example that includes asset loading.
 
 [1]: https://github.com/cnlohr/rawdrawandroid
 [2]: https://github.com/permutationlock/libavengraph
@@ -1157,7 +1150,7 @@ A completed version of the example in this article is available on [GitHub][9].
 [34]: https://developer.android.com/reference/android/app/NativeActivity
 [35]: https://registry.khronos.org/EGL/sdk/docs/man/html/eglGetProcAddress.xhtml
 [36]: https://en.wikipedia.org/wiki/Java_virtual_machine
-[37]: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#Call_type_Method_routines
+[37]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#findclass
 [38]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getmethodid
 [39]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstaticmethodid
 [40]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getfieldid
@@ -1169,3 +1162,6 @@ A completed version of the example in this article is available on [GitHub][9].
 [46]: https://developer.android.com/develop/ui/views/layout/immersive#java
 [47]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/design.html#global-and-local-references
 [48]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#deletelocalref
+[49]: https://developer.android.com/ndk/reference/group/asset
+[50]: https://developer.android.com/training/articles/perf-jni#local-and-global-references
+[51]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#ensurelocalcapacity
