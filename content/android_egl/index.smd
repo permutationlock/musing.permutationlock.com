@@ -20,12 +20,12 @@ Studio IDE and its associated build systems at all costs.
 
 The [rawdraw][1] project is a C app framework that only depends on a
 few tools from the Android SDK. While I wasn't interested
-in the framework itself, the contained `Makefile` was a
-proof-of-concept of exactly the command-line build process that I was after.
+in using the framework itself, the [`Makefile`][52] was
+exactly the command-line build process proof of concept I was after.
 
-In this article I'll walk through how to install the necessary SDK tools,
-write a minimal OpenGL app in C, and package an Android `.apk` file
-to be installed on a device.
+In this article we'll walk through the steps required to acquire the SDK
+build tools, write a minimal OpenGL app in C, and package a `.apk` file
+to install on an Android device.
 
 ## Build environment
 
@@ -129,7 +129,7 @@ The general build strategy will be as follows.
     using an `AndroidManifest.xml` text file, an
     `icon.png` mipmap resource, and the `android.jar` file.
  2. Extract `temp.apk` into `build/` and add a `build/lib/aarch64` directory.
- 3. Compile a `build/lib/aarch64/libseglapp.so` shared library with `clang`.
+ 3. Compile a `build/lib/aarch64/libmain.so` shared library with `clang`.
  4. Re-package the `build/` directory into `temp2.apk` with `zip`.
  5. Run the `zipalign` tool on `temp2.apk` to create `seglapp.apk`.
  6. Sign `seglapp.apk` with `apksigner`.
@@ -150,8 +150,8 @@ Our `template/AndroidManifest.xml` is shown below. The
 tag specifies that our app will use the built-in
 [`NativeActivity`][34] from the Android SDK. This special
 activity will relay Java events to our C code through
-the [Java Native Interface (JNI)][21]. Also, note the
-minimum and target SDK versions (22 and 35), the package name (`org.seglorg`),
+the [Java Native Interface (JNI)][21]. The Also, note the
+minimum and target SDK versions (22 and 35), the org name (`seglorg`),
 and the app name (`seglapp`). In a real project, these
 would need to change; see the [app manifest documentation][29].
 
@@ -160,27 +160,25 @@ would need to change; see the [app manifest documentation][29].
 
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <manifest xmlns:tools="http://schemas.android.com/tools"
-        xmlns:android="http://schemas.android.com/apk/res/android"
-        package="org.seglorg">
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.seglorg.seglapp">
 	<uses-sdk android:minSdkVersion="22"
-              android:targetSdkVersion="35" />
+      android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.SET_RELEASE_APP"/>
-    <application android:debuggable="true" android:hasCode="false"
-            android:label="seglapp"
-            tools:replace="android:icon,android:theme,android:allowBackup,label"
-            android:icon="@mipmap/icon">
-        <activity android:configChanges="keyboardHidden|orientation"
-                android:label="seglapp"
-                android:name="android.app.NativeActivity"
-                android:exported="true">
-            <meta-data android:name="android.app.lib_name"
-                    android:value="seglapp"/>
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
-    </application>
+  <application android:debuggable="true"
+        android:hasCode="false"
+        android:label="seglapp"
+        android:icon="@mipmap/icon">
+    <activity android:configChanges="keyboard|keyboardHidden|orientation"
+        android:label="seglapp"
+        android:name="android.app.NativeActivity"
+        android:exported="true">
+      <intent-filter>
+          <action android:name="android.intent.action.MAIN"/>
+          <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
 </manifest>
 ```
 
@@ -330,7 +328,7 @@ will always refer to the binary distributed with the Android NDK.
 $ mkdir -p ./build/lib/arm64-v8a
 $ clang --target=aarch64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
+    -shared -fPIC -o ./build/lib/arm64-v8a/libmain.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -landroid -llog
 $ cd ./build
@@ -640,15 +638,6 @@ void android_main(struct android_app *app) {
     clock_gettime(CLOCK_MONOTONIC, &last);
 
     for (;;) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        elapsed += time_since_ns(now, last);
-        last = now;
-
-        while (elapsed >= PERIOD) {
-            elapsed -= PERIOD;
-        }
-
         int events;
         struct android_poll_source *source;
         for (;;) {
@@ -659,6 +648,15 @@ void android_main(struct android_app *app) {
             if (source != NULL) {
                 source->process(app, source);
             }
+        }
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        elapsed += time_since_ns(now, last);
+        last = now;
+
+        while (elapsed >= PERIOD) {
+            elapsed -= PERIOD;
         }
 
         if (egl_ctx.display == EGL_NO_DISPLAY) {
@@ -710,7 +708,7 @@ $ adb uninstall org.seglorg.seglapp
 $ rm temp2.apk seglapp.apk
 $ clang --target=aarch64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/arm64-v8a/libseglapp.so \
+    -shared -fPIC -o ./build/lib/arm64-v8a/libmain.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -landroid -llog -lEGL -lGLESv2
 $ cd ./build
@@ -739,19 +737,19 @@ each target! Below we add support for 32 bit ARM, x86, and x86_64.
 $ mkdir -p ./build/lib/armeabi-v7a
 $ clang --target=armv7a-linux-androideabi22 \
     -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/armeabi-v7a/libseglapp.so \
+    -shared -fPIC -o ./build/lib/armeabi-v7a/libmain.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -landroid -llog -lEGL -lGLESv2
 $ mkdir -p ./build/lib/x86
 $ clang --target=i686-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86/libseglapp.so \
+    -shared -fPIC -o ./build/lib/x86/libmain.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -landroid -llog -lEGL -lGLESv2
 $ mkdir -p ./build/lib/x86_64
 $ clang --target=x86_64-linux-android22 \
     -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86_64/libseglapp.so \
+    -shared -fPIC -o ./build/lib/x86_64/libmain.so \
     ./src/main.c ./src/android_native_app_glue.c \
     -lm -landroid -llog -lEGL -lGLESv2
 # then proceed with re-packaging as usual
@@ -759,6 +757,176 @@ $ clang --target=x86_64-linux-android22 \
 
 The devices I own are all `aarch64`, but I've tested
 other architectures with [emulators][30].
+
+## Persistent files and the Android activity lifecycle
+
+The `APP_CMD_RESUME`/`APP_CMD_PAUSE` events are sent as soon as an
+app enters/leaves the foreground. Once an app has left the foreground,
+it becomes low priority and the [Android scheduler][53]
+may terminate its process without notice.
+
+Currently, our app destroys it's EGL surface and OpenGL context
+when the `TERM_WINDOW` event is sent, but otherwise continues running
+as usual in the background. In this section we will handle the
+`PAUSE`/`RESUME` events to save/load the state to/from persistent
+storage, and no longer run updates in the background.
+
+Each app receives a pair of directories to use for
+private persistent files.
+The NDK provides a path to each directory through the
+[`internalDataPath`][54] and [`externalDataPath`][55] members
+of `app->activity`.
+Internal storage is always available, but space may be limited
+depending on the device. External storage is not always available,
+as it may be located on removable storage such as an SD card.
+
+```c
+/* ... */
+
+#include <stdio.h>
+#include <string.h>
+
+/* ... */
+
+static char *path_join(const char *p1, const char *p2) {
+    size_t p1_len = strlen(p1);
+    size_t p2_len = strlen(p2);
+
+    char *p3 = malloc(p1_len + p2_len + 2);
+    size_t p3_len = 0;
+
+    memcpy(&p3[p3_len], p1, p1_len);
+    p3_len += p1_len;
+
+    p3[p3_len++] = '/';
+
+    memcpy(&p3[p3_len], p2, p2_len);
+    p3_len += p2_len;
+
+    p3[p3_len] = '\0';
+
+    return p3;
+}
+
+struct state {
+    int64_t elapsed;
+};
+
+static void load_state(struct state *state, struct android_app *app) {
+    char *fname = path_join(app->activity->internalDataPath, "state");
+    FILE *file = fopen(fname, "r");
+    if (file != NULL) {
+        struct state last_state;
+        size_t len = fread(&last_state, sizeof(last_state), 1, file);
+        if (len) {
+            *state = last_state;
+        }
+        fclose(file);
+    }
+    free(fname);
+}
+
+static void save_state(struct state *state, struct android_app *app) {
+    char *fname = path_join(app->activity->internalDataPath, "state");
+    FILE *file = fopen(fname, "w");
+    if (file != NULL) {
+        fwrite(state, sizeof(*state), 1, file);
+        fclose(file);
+    }
+    free(fname);
+}
+
+static struct state state;
+static int running;
+static struct egl_ctx egl_ctx = {
+    .display = EGL_NO_DISPLAY,
+    .context = EGL_NO_CONTEXT,
+    .surface = EGL_NO_SURFACE,
+};
+
+static void handle_cmd(struct android_app *app, int32_t cmd) {
+    switch (cmd) {
+        case APP_CMD_INIT_WINDOW:
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                SEGL_LOG_ID,
+                "APP_CMD_INIT_WINDOW"
+            );
+
+            egl_ctx_load(&egl_ctx, app);
+
+            break;
+        case APP_CMD_TERM_WINDOW:
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                SEGL_LOG_ID,
+                "APP_CMD_TERM_WINDOW"
+            );
+
+            egl_ctx_unload(&egl_ctx);
+
+            break;
+        case APP_CMD_RESUME: {
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                SEGL_ANDROID_LOG_ID,
+                "APP_CMD_RESUME"
+            );
+
+            running = 1;
+            load_state(&state, app);
+
+            break;
+        }
+        case APP_CMD_PAUSE: {
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                SEGL_ANDROID_LOG_ID,
+                "APP_CMD_PAUSE"
+            );
+
+            running = 0;
+            save_state(&state, app);
+
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+/* ... */
+
+void android_main(struct android_app *app) {
+    /* ... */
+
+    for (;;) {
+        int events;
+        struct android_poll_source *source;
+
+        while (!running) {
+            /* while paused, freeze clock and wait for next event */
+            ALooper_pollOnce(-1, 0, &events, (void **)&source);
+            if (source != NULL) {
+                source->process(app, source);
+            }
+            clock_gettime(CLOCK_MONOTONIC, &last);
+        }
+
+        while (ALooper_pollOnce(0, 0, &events, (void **)&source) >= 0) {
+            if (source != NULL) {
+                source->process(app, source);
+            }
+        }
+
+        /* ... */
+    }
+}
+```
+
+Now the current color state should be saved when the
+the app is hidden or closed, and loaded when
+the app becomes visible or is re-opened.
 
 ## Fullscreen mode and the Java API
 
@@ -800,6 +968,10 @@ void android_main(struct android_app *app) {
     /* JNI calls to enable fullscreen */
 
     jvm->DetachCurrentThread(&jvm);
+
+    int64_t elapsed = 0;
+    struct timespec last;
+    clock_gettime(CLOCK_MONOTONIC, &last);
 
     for (;;) {
         /* ... */
@@ -1090,15 +1262,65 @@ In such cases it's useful to understand how references and lifetimes work
 with regards to the Java garbage collector.
 
 The lifetime of a Java object
-depends on references to that object. Each
-`jobject`, `jclass`, `jstring`, or `jarray` value returned
-from a JNI call is [local reference][47]. The JNI environment
-may only have space for 16 local references by default, but
-[`EnsureLocalCapacity`][51] can reserve more space.
+depends on the existence of references to that object. Each
+`jobject`, `jclass`, `jstring`, or `jarray` returned
+by a JNI call is [local reference][47] that is tracked by the JVM garbage collector.
+Initially, there may only be space reserved for 16 local references, but
+[`EnsureLocalCapacity`][51] can increase this limit.
 The JVM has no knowledge of C scopes or stack
-variable lifetimes, so each local reference exists [until the thread
-is detached][50]. The [`DeleteLocalReference`][48] function
-should be used when a reference is no longer needed.
+variable lifetimes, so each reference will continue to exist
+[until the thread is detached][50]. Thus the [`DeleteLocalReference`][48] function
+should be used to destroy references when they are no longer needed.
+
+## Read-only asset files
+
+If our app needs to provide static assets, and we don't want to embed
+them in the shared library itself, we can add an `assets/` directory
+to our `.apk` archive. Any files placed in `build/assets/` prior to
+packaging will be available to our C code through the NDK [Asset API][56].
+
+```c
+/* ... */
+
+#include <android/asset_manager.h>
+
+/* ... */
+
+void android_main(struct android_app *app) {
+    /* ... */
+
+    AAsset *asset_file = AAssetManager_open(
+        app->activity->assetManager,
+        "name.txt",
+        AASSET_MODE_BUFFER
+    );
+    if (asset_file != NULL) {
+        off_t asset_file_len = AAsset_getLength(asset_file);
+        const char *asset_file_buffer = AAsset_getBuffer(asset_file);
+
+        char *str = malloc((size_t)asset_file_len + 1);
+        memcpy(str, asset_file_buffer, (size_t)asset_file_len);
+        str[asset_file_len] = 0;
+
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            SEGL_ANDROID_LOG_ID,
+            "name asset: %s",
+            str
+        );
+
+        free(str);
+        AAsset_close(asset_file);
+    }
+    
+    /* ... */
+}
+```
+```bash
+$ mkdir build/assets
+$ echo "lana" > build/assets/name.txt
+# then proceed with re-building .so and re-packaging .apk
+```
 
 ## Next steps
 
@@ -1106,13 +1328,22 @@ Our OpenGL example was very disappointing, we didn't even draw a triangle!
 Adding a basic shader pipeline and pushing some vertices to the GPU
 should be priority number one.
 
-We haven't handled any input in our `handle_input` function yet, take a
-look at the NDK [input documentation][7].
-It also might be useful to read through the [native app glue docs][8].
+We also haven't handled any input in our `handle_input` function yet either,
+take a look at the [`AInputEvent` documentation][7] for more information
+on that front.
 
-To package asset files, we can add a `build/asset/` directory and
-load files using the [AAssetManager API][49] with `app->activity.assetManager`.
-See [GitHub][9] for a complete example that includes asset loading.
+If we want to play sound, we could either use the NDK's built-in [Audio API][57],
+or link against `libOpenSLES.so` and use [OpenSL ES][58].
+
+To have our app persist in the background even if the interactive
+activity process is killed by the scheduler, I believe that
+we would need to start a [service][59] and communicate with it via
+the [Binder API][60].
+I haven't tried to write a service yet, so I don't know how easy
+it would be to package one using our simple command line build
+process.
+
+See [GitHub][9] for a full version of the example project.
 
 [1]: https://github.com/cnlohr/rawdrawandroid
 [2]: https://github.com/permutationlock/libavengraph
@@ -1165,3 +1396,12 @@ See [GitHub][9] for a complete example that includes asset loading.
 [49]: https://developer.android.com/ndk/reference/group/asset
 [50]: https://developer.android.com/training/articles/perf-jni#local-and-global-references
 [51]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#ensurelocalcapacity
+[52]: https://github.com/cnlohr/rawdrawandroid/blob/master/Makefile
+[53]: https://developer.android.com/guide/components/activities/activity-lifecycle#alc
+[54]: https://developer.android.com/ndk/reference/struct/a-native-activity#internaldatapath
+[55]: https://developer.android.com/ndk/reference/struct/a-native-activity#externaldatapath
+[56]: https://developer.android.com/ndk/reference/group/asset
+[57]: https://developer.android.com/ndk/reference/group/audio
+[58]: https://www.khronos.org/opensles/
+[59]: https://developer.android.com/develop/background-work/services
+[60]: https://developer.android.com/ndk/reference/group/ndk-binder

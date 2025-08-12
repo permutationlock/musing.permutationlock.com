@@ -70,10 +70,6 @@ code.java .keyword {
   color: var(--keyword);
 }
 
-code.java .type {
-  color: var(--type);
-}
-
 code.java .number {
   color: var(--number);
 }
