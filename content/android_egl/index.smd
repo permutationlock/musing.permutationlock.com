@@ -18,7 +18,7 @@ desktop apps into `.apk` files that would run on my Pixel 7a phone.
 I am a dependency minimalist, so I wanted to avoid the Android
 Studio IDE and its associated build systems at all costs.
 
-The [rawdraw][1] project is a C app framework that only depends on a
+The wonderful [rawdraw Android][1] project is a C app framework that only depends on a
 few tools from the Android SDK. While I wasn't interested
 in using the framework itself, the [`Makefile`][52] was
 exactly the command-line build process proof of concept I was after.
@@ -150,7 +150,7 @@ Our `template/AndroidManifest.xml` is shown below. The
 tag specifies that our app will use the built-in
 [`NativeActivity`][34] from the Android SDK. This special
 activity will relay Java events to our C code through
-the [Java Native Interface (JNI)][21]. The Also, note the
+the [Java Native Interface (JNI)][21]. Also, note the
 minimum and target SDK versions (22 and 35), the org name (`seglorg`),
 and the app name (`seglapp`). In a real project, these
 would need to change; see the [app manifest documentation][29].
@@ -159,23 +159,21 @@ would need to change; see the [app manifest documentation][29].
 <!-- template/AndroidManifest.xml -->
 
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
-<manifest xmlns:tools="http://schemas.android.com/tools"
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.seglorg.seglapp">
-	<uses-sdk android:minSdkVersion="22"
+  <uses-sdk android:minSdkVersion="22"
       android:targetSdkVersion="35" />
-    <uses-permission android:name="android.permission.SET_RELEASE_APP"/>
+  <uses-permission android:name="android.permission.SET_RELEASE_APP"/>
   <application android:debuggable="true"
-        android:hasCode="false"
-        android:label="seglapp"
-        android:icon="@mipmap/icon">
-    <activity android:configChanges="keyboard|keyboardHidden|orientation"
-        android:label="seglapp"
+      android:hasCode="false"
+      android:label="seglapp"
+      android:icon="@mipmap/icon">
+    <activity android:configChanges="orientation"
         android:name="android.app.NativeActivity"
         android:exported="true">
       <intent-filter>
-          <action android:name="android.intent.action.MAIN"/>
-          <category android:name="android.intent.category.LAUNCHER"/>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
   </application>
@@ -661,7 +659,7 @@ void android_main(struct android_app *app) {
 
         if (egl_ctx.display == EGL_NO_DISPLAY) {
             const struct timespec duration = {
-                .tv_nsec = 32L * 1000L * 1000L,
+                .tv_nsec = 16L * 1000L * 1000L,
             };
             nanosleep(&duration, NULL);
         } else {
@@ -724,39 +722,7 @@ $ adb install seglapp.apk
 ```
 
 Running `seglapp` should now display a varying solid color
-background which can be seamlessly suspended and resumed.
-
-## Targeting multiple architectures
-
-The `seglapp.apk` we packaged above will only work on 64 bit ARM devices.
-Fortunately, the process to package a `.apk` for multiple architectures
-is very simple: add a separate subdirectory in `build/lib/` for
-each target! Below we add support for 32 bit ARM, x86, and x86_64.
-
-```bash
-$ mkdir -p ./build/lib/armeabi-v7a
-$ clang --target=armv7a-linux-androideabi22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/armeabi-v7a/libmain.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-$ mkdir -p ./build/lib/x86
-$ clang --target=i686-linux-android22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86/libmain.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-$ mkdir -p ./build/lib/x86_64
-$ clang --target=x86_64-linux-android22 \
-    -Wall -Wextra -Wno-unused-parameter \
-    -shared -fPIC -o ./build/lib/x86_64/libmain.so \
-    ./src/main.c ./src/android_native_app_glue.c \
-    -lm -landroid -llog -lEGL -lGLESv2
-# then proceed with re-packaging as usual
-```
-
-The devices I own are all `aarch64`, but I've tested
-other architectures with [emulators][30].
+background which can be suspended and resumed.
 
 ## Persistent files and the Android activity lifecycle
 
@@ -783,57 +749,128 @@ as it may be located on removable storage such as an SD card.
 ```c
 /* ... */
 
-#include <stdio.h>
-#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* ... */
 
-static char *path_join(const char *p1, const char *p2) {
-    size_t p1_len = strlen(p1);
-    size_t p2_len = strlen(p2);
-
-    char *p3 = malloc(p1_len + p2_len + 2);
-    size_t p3_len = 0;
-
-    memcpy(&p3[p3_len], p1, p1_len);
-    p3_len += p1_len;
-
-    p3[p3_len++] = '/';
-
-    memcpy(&p3[p3_len], p2, p2_len);
-    p3_len += p2_len;
-
-    p3[p3_len] = '\0';
-
-    return p3;
-}
+#define STATE_FILE "state"
+#define TMP_FILE STATE_FILE ".tmp"
 
 struct state {
     int64_t elapsed;
 };
 
 static void load_state(struct state *state, struct android_app *app) {
-    char *fname = path_join(app->activity->internalDataPath, "state");
-    FILE *file = fopen(fname, "r");
-    if (file != NULL) {
+    int dirfd = open(app->activity->internalDataPath, O_RDONLY);
+    if (dirfd < 0) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            SEGL_ANDROID_LOG_ID,
+            "failed to open internalDataPath"
+        );
+        return;
+    }
+
+    int statefd = openat(dirfd, STATE_FILE, O_RDONLY, 0);
+    if (statefd >= 0) {
         struct state last_state;
-        size_t len = fread(&last_state, sizeof(last_state), 1, file);
-        if (len) {
+        char *bytes = (char *)&last_state;
+        char *bytes_end = bytes + sizeof(last_state);
+
+        while (bytes != bytes_end) {
+            ssize_t len = read(statefd, bytes, (size_t)(bytes_end - bytes));
+            if (len < 0) {
+                if (errno == EINTR) {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+
+            bytes += len;
+        }
+
+        if (bytes == bytes_end) {
             *state = last_state;
         }
-        fclose(file);
+
+        close(statefd);
     }
-    free(fname);
+
+    close(dirfd);
 }
 
+enum save_error {
+    SAVE_ERROR_NONE = 0,
+    SAVE_ERROR_DIR,
+    SAVE_ERROR_TMP,
+    SAVE_ERROR_WRITE,
+    SAVE_ERROR_SWAP,
+};
+
 static void save_state(struct state *state, struct android_app *app) {
-    char *fname = path_join(app->activity->internalDataPath, "state");
-    FILE *file = fopen(fname, "w");
-    if (file != NULL) {
-        fwrite(state, sizeof(*state), 1, file);
-        fclose(file);
+    int error = SAVE_ERROR_NONE;
+
+    int dirfd = open(app->activity->internalDataPath, O_RDONLY);
+    if (dirfd < 0) {
+        error = SAVE_ERROR_DIR;
     }
-    free(fname);
+
+    int tmpfd;
+    if (!error) {
+        /* create temp file */
+        tmpfd = openat(
+            dirfd,
+            TMP_FILE,
+            O_WRONLY | O_CREAT,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH
+        );
+        if (tmpfd < 0) {
+            error = SAVE_ERROR_TMP;
+        }
+    }
+
+    if (!error) {
+        /* save state to temp file */
+        char *bytes = (char *)state;
+        char *bytes_end = bytes + sizeof(*state);
+
+        while (bytes != bytes_end) {
+            ssize_t len = write(tmpfd, bytes, (size_t)(bytes_end - bytes));
+            if (len < 0) {
+                if (errno == EINTR) {
+                    continue;
+                } else {
+                    error = SAVE_ERROR_WRITE;
+                    break;
+                }
+            }
+
+            bytes += len;
+        }
+
+        close(tmpfd);
+    }
+
+    if (!error) {
+        /* "atomically" replace state file with temp file */
+        if (renameat(dirfd, TMP_FILE, dirfd, STATE_FILE)) {
+            error = SAVE_ERROR_SWAP;
+        }
+    }
+
+    close(dirfd);
+
+    if (error) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            SEGL_ANDROID_LOG_ID,
+            "failed to save state: %d",
+            (int)error
+        );
+    }
 }
 
 static struct state state;
@@ -900,6 +937,11 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
 void android_main(struct android_app *app) {
     /* ... */
 
+    /* main app loop */
+
+    struct timespec last;
+    clock_gettime(CLOCK_MONOTONIC, &last);
+
     for (;;) {
         int events;
         struct android_poll_source *source;
@@ -919,7 +961,36 @@ void android_main(struct android_app *app) {
             }
         }
 
-        /* ... */
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        state.elapsed += time_since(now, last);
+        last = now;
+
+        while (state.elapsed >= PERIOD) {
+            state.elapsed -= PERIOD;
+        }
+
+        if (egl_ctx.display == EGL_NO_DISPLAY) {
+            /* if EGL display not loaded, wait 16ms (1 frame @ 60FPS) */
+            const struct timespec duration = { .tv_nsec = 16L * 1000L * 1000L };
+            nanosleep(&duration, NULL);
+        } else {
+            int width = ANativeWindow_getWidth(app->window);
+            int height = ANativeWindow_getHeight(app->window);
+
+            float t = (float)state.elapsed / 1e9f;
+
+            glViewport(0, 0, width, height);
+            glClearColor(
+                0.5f * (1.0f + cosf(t)),
+                0.5f * (1.0f + sinf(t)),
+                0.5f * (1.0f - cosf(t)),
+                1.0f
+            );
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            eglSwapBuffers(egl_ctx.display, egl_ctx.surface);
+        }
     }
 }
 ```
@@ -1282,6 +1353,8 @@ packaging will be available to our C code through the NDK [Asset API][56].
 ```c
 /* ... */
 
+#include <string.h>
+
 #include <android/asset_manager.h>
 
 /* ... */
@@ -1322,6 +1395,38 @@ $ echo "lana" > build/assets/name.txt
 # then proceed with re-building .so and re-packaging .apk
 ```
 
+## Targeting multiple architectures
+
+The `seglapp.apk` packaged above will only work on 64 bit ARM devices.
+Fortunately, the process to package a `.apk` for multiple architectures
+is very simple: add a separate subdirectory in `build/lib/` for
+each target! Below we add support for 32 bit ARM, x86, and x86_64.
+
+```bash
+$ mkdir -p ./build/lib/armeabi-v7a
+$ clang --target=armv7a-linux-androideabi22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/armeabi-v7a/libmain.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+$ mkdir -p ./build/lib/x86
+$ clang --target=i686-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86/libmain.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+$ mkdir -p ./build/lib/x86_64
+$ clang --target=x86_64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -o ./build/lib/x86_64/libmain.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+# then proceed with re-packaging as usual
+```
+
+The devices I own are all `aarch64`, but I've tested
+other architectures with [emulators][30].
+
 ## Next steps
 
 Our OpenGL example was very disappointing, we didn't even draw a triangle!
@@ -1333,15 +1438,14 @@ take a look at the [`AInputEvent` documentation][7] for more information
 on that front.
 
 If we want to play sound, we could either use the NDK's built-in [Audio API][57],
-or link against `libOpenSLES.so` and use [OpenSL ES][58].
+or link against `libOpenSLES.so` and use the [OpenSL ES API][58].
 
-To have our app persist in the background even if the interactive
-activity process is killed by the scheduler, I believe that
-we would need to start a [service][59] and communicate with it via
-the [Binder API][60].
-I haven't tried to write a service yet, so I don't know how easy
-it would be to package one using our simple command line build
-process.
+I recently found
+[this excellent video][61] about how Android
+differs from a standard Linux distribution. Unfortunately,
+I found it after tediously re-discovering most of the information
+myself, but I can confirm that almost everything still holds true
+ten years later.
 
 See [GitHub][9] for a full version of the example project.
 
@@ -1405,3 +1509,4 @@ See [GitHub][9] for a full version of the example project.
 [58]: https://www.khronos.org/opensles/
 [59]: https://developer.android.com/develop/background-work/services
 [60]: https://developer.android.com/ndk/reference/group/ndk-binder
+[61]: https://youtu.be/-JQWrNUDud8?si=1__PbK6FpJ2nBoTt
