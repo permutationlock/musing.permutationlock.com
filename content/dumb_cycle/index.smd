@@ -349,6 +349,8 @@ return value of a system call fits in this range and, if so, extract the error
 code.
 
 ```c
+/* ... */
+
 enum syscall {
     SYS_WRITE = 1,
     SYS_EXIT = 60,
@@ -377,6 +379,8 @@ static i64 write(i32 fd, char *bytes, i64 bytes_len) {
     }
     return (i64)return_value;
 }
+
+/* ... */
 ```
 
 There is one particular syscall error that often needs special handling:
@@ -393,6 +397,8 @@ processes: descriptor `0` is standared input, descriptor `1` is standard
 output, and descriptor `2` is standard error.
 
 ```c
+/* ...*/
+
 enum std_fd {
     STDIN = 0,
     STDOUT = 1,
@@ -431,6 +437,8 @@ Almost everything in Linux is treated as a file, and thus we will need
 some system calls to access the file system: `read`, `open` and `close`.
 
 ```c
+/* ... */
+
 enum syscall {
     SYS_READ = 0,
     SYS_WRITE = 1,
@@ -438,8 +446,9 @@ enum syscall {
     SYS_CLOSE = 3,
     SYS_EXIT = 60,
 };
-```
-```c
+
+/* ... */
+
 static i64 read(i32 fd, char *bytes, i64 bytes_len) {
     u64 return_value;
     i32 error;
@@ -452,8 +461,9 @@ static i64 read(i32 fd, char *bytes, i64 bytes_len) {
     }
     return (i64)return_value;
 }
-```
-```c
+
+/* ... */
+
 enum open_mode {
     O_RDONLY = 0,
     O_WRONLY = 1,
@@ -482,6 +492,8 @@ static i32 close(i32 fd) {
     } while (error == EINTR);
     return error;
 }
+
+/* ... */
 ```
 
 We can now open files, read and write to them, and close them. For a simple
@@ -493,6 +505,8 @@ ask the user to enter a name and then read the name from the standard input
 instead. Finally, the program will print a greeting using the given name.
 
 ```c
+/* ... */
+
 enum main_error {
    MAIN_ERROR_NONE = 0,
    MAIN_ERROR_WRITE_STDOUT,
@@ -530,6 +544,8 @@ i32 main(i32 argc, char **argv) {
 
    return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 We can now run and test that both methods work correctly.
@@ -552,12 +568,15 @@ much time has passed. The standard Linux system call for tracking time in
 high resolution is `clock_gettime`.
 
 ```c
+/* ... */
+
 enum syscall {
-    // ...
+    /* ... */
     SYS_CLOCK_GETTIME = 228,
 };
-```
-```c
+
+/* ... */
+
 enum clock_id {
     CLOCK_MONOTONIC = 1,
 };
@@ -580,6 +599,8 @@ static i64 time_since_ns(struct timespec *end, struct timespec *start) {
     i64 seconds = end->sec - start->sec;
     return (seconds * 1000L * 1000L * 1000L) + end->nsec - start->nsec;
 }
+
+/* ... */
 ```
 
 The `clock_gettime` system call takes a clock ID and writes the current timestamp
@@ -594,6 +615,8 @@ that the runtime setup required for VDSO calls is beyond the scope of this
 singularly focused article.
 
 ```c
+/* ... */
+
 enum main_error {
     MAIN_ERROR_NONE = 0,
     MAIN_ERROR_WRITE_STDOUT,
@@ -633,6 +656,8 @@ i32 main(i32 argc, char **argv) {
 
     return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 Our program now prints a dot every second for five seconds.
@@ -653,13 +678,16 @@ accomplish this on Linux, but the `poll` system call is simple and
 suits our use case perfectly.
 
 ```c
+/* ... */
+
 enum syscall {
-    // ...
+    /* ... */
     SYS_POLL = 7,
-    // ...
+    /* ... */
 };
-```
-```c
+
+/* ... */
+
 enum poll_event {
     POLLIN = 1,
 };
@@ -682,6 +710,8 @@ static i32 poll(struct pollfd *fds, i64 fds_len, i32 time_ms) {
     }
     return (i32)return_value;
 }
+
+/* ... */
 ```
 
 The `poll` syscall takes an array of `struct pollfd` values, the length of the
@@ -696,6 +726,8 @@ As an example we can change our program to poll for data on the standard
 input file descriptor while it loops printing elipses.
 
 ```c
+/* ... */
+
 enum main_error {
     MAIN_ERROR_NONE = 0,
     MAIN_ERROR_WRITE_STDOUT,
@@ -749,6 +781,8 @@ i32 main(i32 argc, char **argv) {
 
     return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 We now have an application that will continually print `'.'` characters until
@@ -775,13 +809,16 @@ One way to request memory from the Linux kernel is the
 `mmap` system call.
 
 ```c
+/* ... */
+
 enum syscall {
-    // ...
+    /* ... */
     SYS_MMAP = 9,
-    // ...
+    /* ... */
 };
-```
-```c
+
+/* ... */
+
 enum mmap_prot {
     PROT_READ = 1,
     PROT_WRITE = 2,
@@ -815,6 +852,8 @@ static void *mmap(
     }
     return (void *)return_value;
 }
+
+/* ... */
 ```
 
 An `mmap` call asks the operating system to allocate contiguous blocks of
@@ -872,6 +911,8 @@ we will simply ensure that our arena allocator aligns all pointers to
 `16` bytes.
 
 ```c
+/* ... */
+
 void *alloc(struct arena *arena, i64 size) {
     i64 available = arena->end - arena->start;
     i64 padding = -(i64)arena->start & (16 - 1);
@@ -905,6 +946,8 @@ Now we can make one `mmap` call at the start of our program and create an `8MB`
 arena large enough for all our dynamic memory allocations.
 
 ```c
+/* ... */
+
 struct arena {
     char *start;
     char *end;
@@ -937,6 +980,8 @@ i32 main(i32 argc, char **argv) {
 
     return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 You may be wondering why we created a separate `src/mem.c`
@@ -1011,13 +1056,16 @@ screen. Both of these tasks will require the `ioctl` system call, short for
 “input output control.”
 
 ```c
+/* ... */
+
 enum syscall {
-    // ...
+    /* ... */
     SYS_IOCTL = 16,
-    // ...
+    /* ... */
 };
-```
-```c
+
+/* ... */
+
 enum ioctl_dir {
     IOCTL_WRITE = 1,
     IOCTL_READ = 2,
@@ -1039,6 +1087,8 @@ static i32 ioctl(i32 fd, u32 dir, u32 type, u32 number, u32 size, char *arg) {
     } while (error == EINTR);
     return error;
 }
+
+/* ... */
 ```
 
 The `fd` argument is the file descriptor of the device in question.
@@ -1070,6 +1120,8 @@ all of them and open a file descriptor for each device that might be a
 keyboard.
 
 ```c
+/* ... */
+
 enum ioctl_type {
     IOCTL_EV = (i32)'E',
 };
@@ -1144,6 +1196,8 @@ static i32 is_keyboard(i32 fd) {
     }
     return 0;
 }
+
+/* ... */
 ```
 
 To determine whether a given file represents a keyboard device we
@@ -1163,13 +1217,16 @@ available input devices that could be the user’s keyboard. We will use the
 `/dev/input`.
 
 ```c
+/* ... */
+
 enum syscall {
-    // ...
+    /* ... */
     SYS_GETDENTS = 78,
-    // ...
+    /* ... */
 };
-```
-```c
+
+/* ... */
+
 struct dirent {
     u64 ino;
     u64 off;
@@ -1190,6 +1247,8 @@ static i64 getdents(i32 fd, struct dirent *dents, i64 dents_size) {
     }
     return (i64)return_value;
 }
+
+/* ... */
 ```
 
 The `getdents` system call writes a `struct dirent` object into the
@@ -1201,6 +1260,8 @@ a filesystem specific offset value, the total size of the dirent object, and a n
 for the filename.
 
 ```c
+/* ... */
+
 static i32 open_keyboards(
     struct arena temp_arena,
     i32 *keyboards,
@@ -1264,6 +1325,8 @@ static i32 open_keyboards(
     close(input_dir_fd);
     return keyboards_len;
 }
+
+/* ... */
 ```
 
 Acquiring a keyboard involves
@@ -1290,6 +1353,8 @@ Now that we have at least one keyboard, we can poll for key
 press events.
 
 ```c
+/* ... */
+
 struct input_event {
     struct timespec time;
     u16 type;
@@ -1403,6 +1468,8 @@ i32 main(i32 argc, char **argv) {
 
     return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 Our program will now print a dot every second until the user presses the `ESC`
@@ -1486,12 +1553,15 @@ video card. We will use `/dev/dri/card0` since this will be the correct
 card to use for the majority of systems.
 
 ```c
+/* ... */
+
 enum ioctl_type {
     IOCTL_EV = (i32)'E',
     IOCTL_DRM = (i32)'d',
 };
-```
-```c
+
+/* ... */
+
 enum drm_ioctl {
     DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
 };
@@ -1597,8 +1667,9 @@ static struct drm_mode_resources *drm_mode_get_resources(
     *arena = temp_arena;
     return res;
 }
-```
-```c
+
+/* ... */
+
 enum main_error {
     MAIN_ERROR_NONE = 0,
     MAIN_ERROR_MMAP,
@@ -1634,6 +1705,8 @@ i32 main(i32 argc, char **argv) {
 
     return MAIN_ERROR_NONE;
 }
+
+/* ... */
 ```
 
 To get the card resources we first need to allocate arrays to store ids for
@@ -1654,12 +1727,14 @@ With our video card resources successfully retrieved, we need to find a
 valid connector.
 
 ```c
+/* ... */
 enum drm_ioctl {
     DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
     DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
 };
-```
-```c
+
+/* ... */
+
 enum drm_mode {
     DRM_MODE_CONNECTED = 1,
 };
@@ -1791,6 +1866,8 @@ static struct drm_mode_connector *drm_mode_get_connector(
     *arena = temp_arena;
     return conn;
 }
+
+/* ... */
 ```
 
 The `drm_mode_get_connector` function works in an almost identical way to
@@ -1801,12 +1878,21 @@ connectors until we hit one that is connected and has at least one valid
 display mode.
 
 ```c
+/* ... */
+
 enum main_error {
-    // ...
+    /* ... */
     MAIN_ERROR_DRM_FIND_CONNECTOR,
 };
-```
-```c
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+
+    struct drm_mode_resources *res = drm_mode_get_resources(&arena, card_fd);
+    if (res == 0) {
+        return MAIN_ERROR_DRM_GET_RESOURCES;
+    }
+
     u32 conn_index;
     struct drm_mode_connector *conn = 0;
     for (conn_index = 0; conn_index < res->connectors_len; ++conn_index) {
@@ -1825,18 +1911,26 @@ enum main_error {
     if (conn_index == res->connectors_len || conn == 0) {
         return MAIN_ERROR_DRM_FIND_CONNECTOR;
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 We can retreive an encoder in a similar manner.
 						
 ```c
+/* ... */
+
 enum drm_ioctl {
     DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
     DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
     DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
 };
-```
-```c
+
+/* ... */
+
 struct drm_mode_encoder {
     u32 encoder_id;
     u32 encoder_type;
@@ -1876,14 +1970,20 @@ static struct drm_mode_encoder *drm_mode_get_encoder(
     *arena = temp_arena;
     return enc;
 }
-```
-```c
+
+/* ... */
+
 enum main_error {
-    // ...
+    /* ... */
     MAIN_ERROR_DRM_GET_ENCODER,
 };
-```
-```c
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+    if (conn_index == res->connectors_len || conn == 0) {
+        return MAIN_ERROR_DRM_FIND_CONNECTOR;
+    }
+
     struct drm_mode_encoder *enc = drm_mode_get_encoder(
         &arena,
         card_fd,
@@ -1892,6 +1992,11 @@ enum main_error {
     if (enc == 0) {
         return MAIN_ERROR_DRM_GET_ENCODER;
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 In order to draw pixels to the screen we will be creating a “dumb
@@ -1906,6 +2011,8 @@ the type of graphics card used. Such GPU APIs involve a lot more work to set
 up than the simple pixel arrays that we will use.
 
 ```c
+/* ... */
+
 enum drm_ioctl {
     DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
     DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
@@ -1914,8 +2021,9 @@ enum drm_ioctl {
     DRM_IOCTL_MODE_CREATE_DUMB = 0xb2,
     DRM_IOCTL_MODE_MAP_DUMB = 0xb3,
 };
-```
-```c
+
+/* ... */
+
 struct drm_mode_create_dumb {
     u32 height;
     u32 width;
@@ -2035,14 +2143,20 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
 
     return buf;
 }
-```
-```c
+
+/* ... */
+
 enum main_error {
-    // ...
+    /* ... */
     MAIN_ERROR_DRM_CREATE_DUMB_BUFFER,
 };
-```
-```c
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+    if (enc == 0) {
+        return MAIN_ERROR_DRM_GET_ENCODER;
+    }
+
     struct drm_mode_dumb_buffer *buf = drm_mode_create_dumb_buffer(
         &arena,
         card_fd,
@@ -2052,6 +2166,11 @@ enum main_error {
     if (buf == 0) {
         return MAIN_ERROR_DRM_CREATE_DUMB_BUFFER;
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 The last step before we can see pixels on the
@@ -2068,8 +2187,9 @@ enum drm_ioctl {
     DRM_IOCTL_MODE_GET_CRTC = 0xa1,
     DRM_IOCTL_MODE_SET_CRTC = 0xa2,
 };
-```
-```c
+
+/* ... */
+
 struct drm_mode_crtc {
     u32 *set_connectors;
     u32 connectors_len;
@@ -2134,15 +2254,21 @@ static i32 drm_mode_set_crtc(
         (char *)crtc
     );
 }
-```
-```c
+
+/* ... */
+
 enum main_error {
-    // ...
+    /* ... */
     MAIN_ERROR_DRM_GET_CRTC,
     MAIN_ERROR_DRM_SET_CRTC,
 };
-```
-```c
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+    if (buf == 0) {
+        return MAIN_ERROR_DRM_CREATE_DUMB_BUFFER;
+    }
+
     struct drm_mode_crtc *crtc = drm_mode_get_crtc(
         &arena,
         card_fd,
@@ -2164,12 +2290,25 @@ enum main_error {
     if (error != 0) {
         return MAIN_ERROR_DRM_SET_CRTC;
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 Finally, we can add our keyboard event loop back in and insert code to write
 color values to the dumb buffer pixels.
 
 ```c
+/* ... */
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+    if (error != 0) {
+        return MAIN_ERROR_DRM_SET_CRTC;
+    }
+
     struct timespec last, now;
     error = clock_gettime(CLOCK_MONOTONIC, &last);
     if (error) {
@@ -2242,6 +2381,11 @@ color values to the dumb buffer pixels.
             }
         }
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 The program should fill the screen with a color that slowly changes from
@@ -2269,6 +2413,8 @@ grid that fits inside the screen resolution will be computed and then a scaled
 version of the game board will be drawn into the dumb buffer memory.
 
 ```c
+/* ... */
+
 enum color {
     COLOR_BLUE = 0x0000ff,
     COLOR_GRAY = 0xededed
@@ -2325,17 +2471,27 @@ static void draw_game(
         }
     }
 }
-```
-```c
+
+/* ... */
+
 enum main_error {
-    // ...
+    /* ... */
     MAIN_ERROR_OPEN_KEYBOARD,
     MAIN_ERROR_READ_KEYBOARD,
     MAIN_ERROR_CLOCK_GETTIME,
     MAIN_ERROR_POLL,
 };
-```
-```c
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+
+    struct input_event keyboard_events[32];
+    struct pollfd keyboard_pollfds[32];
+    for (i32 i = 0; i < keyboards_len; ++i) {
+        keyboard_pollfds[i].fd = keyboards[i];
+        keyboard_pollfds[i].events = POLLIN;
+    }
+
     u32 square_len = (buf->height > buf->width) ? buf->width : buf->height;
     u32 scale = square_len / 90;
     u32 board_size = square_len - (square_len % 90);
@@ -2417,6 +2573,11 @@ enum main_error {
             }
         }
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 Enjoy DumbCycling!
@@ -2445,12 +2606,15 @@ monitor refresh, and a function to detect when a page
 flip occurs.
 
 ```c
+/* ... */
+
 enum drm_ioctl {
-    // ...
+    /* ... */
     DRM_IOCTL_MODE_PAGE_FLIP = 0xb0,
 };
-```
-```c
+
+/* ... */
+
 struct drm_mode_crtc_page_flip {
     u32 crtc_id;
     u32 fb_id;
@@ -2515,14 +2679,7 @@ static i32 drm_mode_handle_events(i32 fd, struct arena temp_arena) {
     return flip_complete;
 }
 
-```
-```c
-enum main_error {
-    // ...
-    MAIN_ERROR_DRM_HANDLE_EVENTS,
-    MAIN_ERROR_DRM_PAGE_FLIP,
-    // ...
-};
+/* ... */
 ```
 
 Next we simply need to create a second dumb frame
@@ -2537,6 +2694,8 @@ only after a game update, to avoid jumps in partially
 drawn squares.
 
 ```c
+/* ... */
+
 struct game_state {
     i32 x;
     i32 y;
@@ -2577,8 +2736,9 @@ static void update_game(struct game_state *state) {
         state->board[state->y * 90 + state->x] = 1;
     }
 }
-```
-```c
+
+/* ... */
+
 static void draw_partial(
     struct drm_mode_dumb_buffer *buf,
     struct game_state *state,
@@ -2620,8 +2780,21 @@ static void draw_partial(
         }
     }
 }
-```
-```c
+
+/* ... */
+
+enum main_error {
+    /* ... */
+    MAIN_ERROR_DRM_HANDLE_EVENTS,
+    MAIN_ERROR_DRM_PAGE_FLIP,
+};
+
+i32 main(i32 argc, char **argv) {
+    /* ... */
+    if (enc == 0) {
+        return MAIN_ERROR_DRM_GET_ENCODER;
+    }
+
     u32 buf_index = 0;
     struct drm_mode_dumb_buffer *bufs[2];
     bufs[0] = drm_mode_create_dumb_buffer(
@@ -2633,8 +2806,18 @@ static void draw_partial(
     if (bufs[0] == 0 || bufs[1] == 0) {
         return MAIN_ERROR_DRM_CREATE_DUMB_BUFFER;
     }
-```
-```c
+
+    struct drm_mode_crtc *crtc = drm_mode_get_crtc(
+        &arena,
+        card_fd,
+        enc->crtc_id
+    );
+    if (crtc == 0) {
+        return MAIN_ERROR_DRM_GET_CRTC;
+    }
+
+    crtc->mode = conn->modes[0];
+
     i32 error = drm_mode_set_crtc(
         card_fd,
         crtc,
@@ -2668,16 +2851,24 @@ static void draw_partial(
         return MAIN_ERROR_DRM_PAGE_FLIP;
     }
     buf_index ^= 1;
-```
-```c
+
     i64 elapsed = 0;
     struct timespec last, now;
     error = clock_gettime(CLOCK_MONOTONIC, &last);
     if (error) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
-```
-```c
+
+    i32 keyboards[32];
+    i32 keyboards_len = open_keyboards(
+        arena,
+        keyboards,
+        sizeof(keyboards) / sizeof(*keyboards)
+    );
+    if (keyboards_len <= 0) {
+        return MAIN_ERROR_OPEN_KEYBOARD;
+    }
+
     struct input_event keyboard_events[32];
     struct pollfd pollfds[32 + 1];
     for (i32 i = 0; i < keyboards_len; ++i) {
@@ -2799,6 +2990,11 @@ static void draw_partial(
             }
         }
     }
+
+    return MAIN_ERROR_NONE;
+}
+
+/* ... */
 ```
 
 Now you can enjoy DumbCycling without judder!
