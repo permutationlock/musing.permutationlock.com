@@ -1,0 +1,147 @@
+---
+.title = "Parsing and Rendering C Code",
+.date = @date("2025-07-25T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = true,
+.custom = {
+	"git" : "aven-cfmt"
+},
+---
+
+I write a lot of C code. In fact, outside of exercising and watching
+movies/YouTube, programming in C is the only thing that I do every
+single day.
+
+A problem I have dealt with was that none of the existing C
+auto-formatters would format in a way that was appealing to me.
+Naturally, I tediously formatted my source code manually until I
+finally built the courage to write one of my own.
+
+This article covers my
+experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
+C parser and renderer. It was one of the most fun and productive
+three week periods my life.
+
+**Note:** I will generally discuss the conclusion
+I reached, not the full iterative implementation process. E.g. I describe
+a finite state machine tokenizer that uses
+`switch` statement jump tables, but for the majority of development
+the tokenizer was a sequence of function calls,
+one per token type, each backtracking on failure.
+
+## Motivation
+
+I do not come from a traditional C programming background, nor do I write
+traditional C.
+My coding style is based on a lot of trial and error with
+regards to personal productivity. It is heavily inspired by the
+[nullprogram blog][1], the [Zig][2]
+programming language, and Ryan Fleury's talk [*Enter the Arena*][9],
+though I doubt any of the people mentioned would fully approve
+of the way I do things.
+
+In short, I use unity builds (one translation unit), errors as values,
+and slices (e.g. length-based strings). I also often pass structs by value,
+prefer indices to pointers ([*Programming Without Pointers*][10]),
+and almost exclusively allocate memory from arenas.
+
+When it comes to C source code formatting, there are a few common options
+available: [clang-format][3], [astyle][4], and [indent][5]. Almost all of
+these are designed with a classical C (or worse C++) style in mind.
+None support a modern formatting style along the lines of
+[`zig fmt`][6] or [`go fmt`][7].
+
+## C is hard to parse
+
+One of the reasons I love C is that it's such a simple language.
+One of the C11 compilers I use is written in under 10k lines of C99 code.
+It is seems almost paradoxical, then, that parsing an isolated C source
+file might be an impossible task.
+
+The big issue is, of course, the preprocessor. The existence of `#define`
+directives means that identifiers and function invocations
+may be replaced by arbitrary strings of tokens.
+Even worse, `#include` directives search a list of paths for
+files to be pasted directly into the current source,
+each of which may contain more `#define` and `#include` directives.
+Then there are the conditional directives (`#if`, `#else`, `#ifdef`, etc.)
+which may delete subsequent sections of the source file based on the
+macro values defined at the given line, which depend on the directives
+evaluated at all prior lines.
+
+### Correctness vs. simplicity and usability
+
+Thus, as I see it, every C parser has two choices:
+
+ 1. require all include paths as input and parse with the preprocessor and semantic analysis;
+ 2. assume "reasonable" preprocessor use and hueristically parse a subset of C.
+
+Almost all source code formatters that I'm aware of choose the second option.
+The first reason for this is that hueristics are generally quite accurate
+for source code that is practically encountered. The most compelling reason
+to avoid the first option in my eyes,
+however, is usability.
+If the formatter requires full knowledge of the sysroot, include paths, and compiler flags
+(e.g. `-D` for `gcc`/`clang`), then either each users'
+build system must provide such information to the formatter, or
+the formatter must be able to understand each users' build system.
+
+### My subset of C
+
+I decided to follow the core C11 standard
+with the GNU inline assembly and attribute
+specifier extensions. The following headigns describe my
+modifications to the phrase structure grammar to accomodate
+parsing without preprocessing.
+
+**Note:** These details were ironed out
+after I had written a basic tokenizer, recursive descent
+expression parser, and AST renderer.
+
+#### Macro definitions
+
+Macro `#define A` and `#define A(...)` directives are each be parsed into a
+separate AST. Each macro AST will then be rendered when the corresponding
+portion of the primary AST is rendered.
+
+A macro definiton may be followed by a single token, a type name, an
+initializer list, a list of declaration specifiers, or an expression statement,
+a `do` statement, or a declaration, all ommitting the terminating `;`.
+The special `#` and `##` operators are also allowed in preprocessor code.
+
+#### Macro invocations
+
+A macro invocation is an identifier followed by an optional parenthesised parameter
+list of assignment expressions and type names. Macro invocations may appear in
+type names, declaration specifiers, and compound string literals. In addition, a
+postfix parenthesis expression is allowed to contain type names in its parameter
+list to allow type parameterised macro invocations within expressions.
+
+#### Conditional directives
+
+Conditional directives (`#if`, `#else`, `#endif`, `#ifdef`, etc.)
+are parsed and rendered in exactly the same way as macro definitions.
+In the primary translation unit AST, conditional directives are simply ignored.
+Therefore a source file must be still parseable when all
+preprocessor directive lines are removed. E.g. the following is invalid
+according to `aven-cfmt`.
+
+```c
+#ifdef A
+int foo(int n) {
+#else
+int bar(int n){
+#endif
+    // body
+}
+```
+
+## Tokenization
+
+For my parser I decided to simply follow the preprocessor lexical grammar in
+the C11 standard. A standard way to write a tokenizer is to define finite state
+machine, because it is both simple to write (though verbose) and performant. This
+is the route I chose to take as well.
+
+
