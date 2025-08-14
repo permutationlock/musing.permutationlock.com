@@ -16,7 +16,7 @@
 Recently, I set out find a simple way to package my C and OpenGL
 desktop apps into `.apk` files that would run on my Pixel 7a phone.
 I am a dependency minimalist, so I wanted to avoid the Android
-Studio IDE and its associated build systems at all costs.
+Studio IDE and its associated build systems if at all possible.
 
 The wonderful [rawdraw Android][1] project is a C app framework that only depends on a
 few tools from the Android SDK. While I wasn't interested
@@ -747,6 +747,8 @@ depending on the device. External storage is not always available,
 as it may be located on removable storage such as an SD card.
 
 ```c
+/* src/main.c */
+
 /* ... */
 
 #include <errno.h>
@@ -811,7 +813,7 @@ enum save_error {
 };
 
 static void save_state(struct state *state, struct android_app *app) {
-    int error = SAVE_ERROR_NONE;
+    enum save_error error = SAVE_ERROR_NONE;
 
     int dirfd = open(app->activity->internalDataPath, O_RDONLY);
     if (dirfd < 0) {
@@ -1017,6 +1019,8 @@ on a `pthread` created without the JVM's knowledge. Therefore
 we must first "attach" our thread to the JVM that our app is running in.
 
 ```c
+/* src/main.c */
+
 /* ... */
 
 #include <jni.h>
@@ -1040,13 +1044,9 @@ void android_main(struct android_app *app) {
 
     jvm->DetachCurrentThread(&jvm);
 
-    int64_t elapsed = 0;
-    struct timespec last;
-    clock_gettime(CLOCK_MONOTONIC, &last);
+    /* main loop */
 
-    for (;;) {
-        /* ... */
-    }
+    /* ... */
 }
 ```
 
@@ -1103,6 +1103,11 @@ call methods and access fields with [`Call<type>Method`][42],
 [`GetStatic<type>Field`][45].
 
 ```c
+/* src/main.c */
+
+/* ... */
+
+void android_main(struct android_app *app) {
     /* ... */
 
     /* NOTE: JavaVM and JNIEnv are pointer types */
@@ -1316,6 +1321,7 @@ call methods and access fields with [`Call<type>Method`][42],
     jvm->DetachCurrentThread(app->activity->vm);
 
     /* ... */
+}
 ```
 
 If we re-package the `.apk`, then install and run it on our device,
@@ -1332,15 +1338,14 @@ throughout an app's lifetime.
 In such cases it's useful to understand how references and lifetimes work
 with regards to the Java garbage collector.
 
-The lifetime of a Java object
-depends on the existence of references to that object. Each
-`jobject`, `jclass`, `jstring`, or `jarray` returned
-by a JNI call is [local reference][47] that is tracked by the JVM garbage collector.
+Each `jobject`, `jclass`, `jstring`, or `jarray` is a
+[local reference][47] tracked by the JNI environment for
+the JVM garbage collector.
 Initially, there may only be space reserved for 16 local references, but
 [`EnsureLocalCapacity`][51] can increase this limit.
 The JVM has no knowledge of C scopes or stack
-variable lifetimes, so each reference will continue to exist
-[until the thread is detached][50]. Thus the [`DeleteLocalReference`][48] function
+variable lifetimes, so references will exist
+[until the thread is detached][50]. The [`DeleteLocalReference`][48] function
 should be used to destroy references when they are no longer needed.
 
 ## Read-only asset files
@@ -1351,6 +1356,8 @@ to our `.apk` archive. Any files placed in `build/assets/` prior to
 packaging will be available to our C code through the NDK [Asset API][56].
 
 ```c
+/* src/main.c */
+
 /* ... */
 
 #include <string.h>
