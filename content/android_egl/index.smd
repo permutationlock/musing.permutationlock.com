@@ -138,11 +138,11 @@ To package the initial `temp.apk`, we will first create a `template/`
 directory that is structured as follows.
 
 ```
- - template/
-     - AndroidManifest.xml
-     - res/
-         - mipmap/
-             - icon.png
+template/
+    AndroidManifest.xml
+    res/
+        mipmap/
+            icon.png
 ```
 
 Our `template/AndroidManifest.xml` is shown below. The
@@ -150,7 +150,7 @@ Our `template/AndroidManifest.xml` is shown below. The
 tag specifies that our app will use the built-in
 [`NativeActivity`][34] from the Android SDK. This special
 activity will relay Java events to our C code through
-the [Java Native Interface (JNI)][21]. Also, note the
+the [Java Native Interface (JNI)][21]. Also note the
 minimum and target SDK versions (22 and 35), the org name (`seglorg`),
 and the app name (`seglapp`). In a real project, these
 would need to change; see the [app manifest documentation][29].
@@ -171,6 +171,7 @@ would need to change; see the [app manifest documentation][29].
     <activity android:configChanges="orientation"
         android:name="android.app.NativeActivity"
         android:exported="true">
+      <meta-data android:name="android.app.lib_name" android:value="main"/>
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
@@ -269,16 +270,6 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
             );
 
             /* app window closed or paused, release EGL context */
-
-            break;
-        case APP_CMD_DESTROY:
-            __android_log_print(
-                ANDROID_LOG_INFO,
-                SEGL_LOG_ID,
-                "APP_CMD_DESTROY"
-            );
-
-            /* app has been closed */
 
             break;
         default:
@@ -382,7 +373,7 @@ Try running the above `logcat` command, then opening `seglapp` on your
 Android device. Look at what log messages are printed when you open, minimize,
 resume, and close the application. Below is the `logcat` output I see when
 I tap on the app, swipe up to minimize it, open the app again, then
-manually terminate it.
+terminate it.
 
 ```bash
 $ adb shell logcat SEGL:I *:S
@@ -391,7 +382,6 @@ $ adb shell logcat SEGL:I *:S
 07-24 14:37:23.308 25465 25484 I SEGL    : APP_CMD_TERM_WINDOW
 07-24 14:37:25.070 25465 25484 I SEGL    : APP_CMD_INIT_WINDOW
 07-24 14:37:28.058 25465 25484 I SEGL    : APP_CMD_TERM_WINDOW
-07-24 14:37:28.085 25465 25484 I SEGL    : APP_CMD_DESTROY
 ```
 
 **Note:** The `android_native_app_glue.c` file produces a bunch of useful log
@@ -596,16 +586,6 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
             egl_ctx_unload(&egl_ctx);
 
             break;
-        case APP_CMD_DESTROY:
-            __android_log_print(
-                ANDROID_LOG_INFO,
-                SEGL_LOG_ID,
-                "APP_CMD_DESTROY"
-            );
-
-            /* app has been closed */
-
-            break;
         default:
             break;
     }
@@ -721,8 +701,8 @@ $ apksigner sign --key-pass pass:mypassword \
 $ adb install seglapp.apk
 ```
 
-Running `seglapp` should now display a varying solid color
-background which can be suspended and resumed.
+The app should now display a varying
+background color and continue to run while minimized.
 
 ## Persistent files and the Android activity lifecycle
 
@@ -1000,6 +980,11 @@ void android_main(struct android_app *app) {
 Now the current color state should be saved when the
 the app is hidden or closed, and loaded when
 the app becomes visible or is re-opened.
+
+**Note:** For some apps running in the background may be preferrable
+to this new pause and resume behavior. To run in the background
+and still avoid losing progress, the app could save its state to disk
+periodically and load the last state at the start of `android_main`.
 
 ## Fullscreen mode and the Java API
 
@@ -1444,8 +1429,19 @@ We also haven't handled any input in our `handle_input` function yet either,
 take a look at the [`AInputEvent` documentation][7] for more information
 on that front.
 
-If we want to play sound, we could either use the NDK's built-in [Audio API][57],
-or link against `libOpenSLES.so` and use the [OpenSL ES API][58].
+If we want to play sound, we could use the NDK's built-in [Audio API][57]
+(available in SDK versions 26 or later),
+or link against `libOpenSLES.so` and use the [OpenSL ES API][58] (deprecated,
+but still available). Another option is to use a high level wrapper
+like [miniaudio][62].
+
+It may be useful to check the SDK version an app is running on,
+e.g. to see if the aforementioned Audio API is supported.
+The Android libc provides [`__system_property_get`][63] in
+`<sys/system_properties.h>` which can be used to retrieve
+info about the device's Android OS. The `"ro.build.version.sdk"`
+in particular will retrieve a C string
+containing the SDK version.
 
 I recently found
 [this excellent video][61] about how Android
@@ -1517,3 +1513,5 @@ See [GitHub][9] for a full version of the example project.
 [59]: https://developer.android.com/develop/background-work/services
 [60]: https://developer.android.com/ndk/reference/group/ndk-binder
 [61]: https://youtu.be/-JQWrNUDud8?si=1__PbK6FpJ2nBoTt
+[62]: https://github.com/mackron/miniaudio
+[63]: https://android.googlesource.com/platform/bionic/+/466dbe4/libc/include/sys/system_properties.h#47

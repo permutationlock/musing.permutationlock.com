@@ -1728,8 +1728,9 @@ valid connector.
 
 ```c
 /* ... */
+
 enum drm_ioctl {
-    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
+    /* ... */
     DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
 };
 
@@ -1924,8 +1925,7 @@ We can retreive an encoder in a similar manner.
 /* ... */
 
 enum drm_ioctl {
-    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
-    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
+    /* ... */
     DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
 };
 
@@ -2014,9 +2014,7 @@ up than the simple pixel arrays that we will use.
 /* ... */
 
 enum drm_ioctl {
-    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
-    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
-    DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
+    /* ... */
     DRM_IOCTL_MODE_ADD_FB = 0xae,
     DRM_IOCTL_MODE_CREATE_DUMB = 0xb2,
     DRM_IOCTL_MODE_MAP_DUMB = 0xb3,
@@ -2177,13 +2175,10 @@ The last step before we can see pixels on the
 screen is to get a CRTC and attach the dumb frame buffer that we just created.
 
 ```c
+/* ... */
+
 enum drm_ioctl {
-    DRM_IOCTL_MODE_GET_RESOURCES = 0xa0,
-    DRM_IOCTL_MODE_GET_CONNECTOR = 0xa7,
-    DRM_IOCTL_MODE_GET_ENCODER = 0xa6,
-    DRM_IOCTL_MODE_ADD_FB = 0xae,
-    DRM_IOCTL_MODE_CREATE_DUMB = 0xb2,
-    DRM_IOCTL_MODE_MAP_DUMB = 0xb3,
+    /* ... */
     DRM_IOCTL_MODE_GET_CRTC = 0xa1,
     DRM_IOCTL_MODE_SET_CRTC = 0xa2,
 };

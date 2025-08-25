@@ -5,18 +5,17 @@
 .layout = "post.shtml",
 .draft = true,
 .custom = {
-	"git" : "aven-cfmt"
+    "git" : "aven-cfmt"
 },
 ---
 
 I write a lot of C code. In fact, outside of exercising and watching
-movies/YouTube, programming in C is the only thing that I do every
-single day.
-
-A problem I have dealt with was that none of the existing C
-auto-formatters would format in a way that was appealing to me.
-Naturally, I tediously formatted my source code manually until I
-finally built the courage to write one of my own.
+movies/YouTube, programming and writing about programming are
+the only things that I regularly do. But formatting my C source
+files always felt like a chore.
+None of the existing C auto-formatters were able to produce an output
+that appealed to me. A few months ago, I finally built up the courage
+to write one of my own.
 
 This article covers my
 experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
@@ -36,21 +35,19 @@ I do not come from a traditional C programming background, nor do I write
 traditional C.
 My coding style is based on a lot of trial and error with
 regards to personal productivity. It is heavily inspired by the
-[nullprogram blog][1], the [Zig][2]
-programming language, and Ryan Fleury's talk [*Enter the Arena*][9],
-though I doubt any of the people mentioned would fully approve
-of the way I do things.
+[nullprogram blog][1] and the [Zig][2] programming language. It is far
+from perfect, but it's how I currently enjoy to work on isolated personal
+projects.
 
 In short, I use unity builds (one translation unit), errors as values,
-and slices (e.g. length-based strings). I also often pass structs by value,
-prefer indices to pointers ([*Programming Without Pointers*][10]),
-and almost exclusively allocate memory from arenas.
+and slices (e.g. length-based strings). I also prefer to pass structs by value,
+use indices over pointers ([*Programming Without Pointers*][10]),
+and allocate memory from arenas ([*Enter the Arena*][9]).
 
 When it comes to C source code formatting, there are a few common options
 available: [clang-format][3], [astyle][4], and [indent][5]. Almost all of
 these are designed with a classical C (or worse C++) style in mind.
-None support a modern formatting style along the lines of
-[`zig fmt`][6] or [`go fmt`][7].
+None support a modern style along the lines of [`zig fmt`][6].
 
 ## C is hard to parse
 
@@ -72,28 +69,29 @@ evaluated at all prior lines.
 
 ### Correctness vs. simplicity and usability
 
-Thus, as I see it, every C parser has two choices:
+As I see it, every C parser has two choices:
 
- 1. require all include paths as input and parse with the preprocessor and semantic analysis;
+ 1. take the include paths as input and parse using the preprocessor and full semantic analysis;
  2. assume "reasonable" preprocessor use and hueristically parse a subset of C.
 
 Almost all source code formatters that I'm aware of choose the second option.
-The first reason for this is that hueristics are generally quite accurate
-for source code that is practically encountered. The most compelling reason
-to avoid the first option in my eyes,
-however, is usability.
-If the formatter requires full knowledge of the sysroot, include paths, and compiler flags
-(e.g. `-D` for `gcc`/`clang`), then either each users'
+The first reason for this is that hueristics are quite accurate
+for most source code that is practically encountered. But, in my eyes,
+the most compelling reason to avoid the first option is usability.
+If the formatter requires full knowledge of include paths and built-in
+compiler macros (including macros provided by build flags, e.g. `-D`
+for `gcc`/`clang`),
+then either each user's
 build system must provide such information to the formatter, or
-the formatter must be able to understand each users' build system.
+the formatter must be able to understand each user's build system.
 
 ### My subset of C
 
 I decided to follow the core C11 standard
 with the GNU inline assembly and attribute
-specifier extensions. The following headigns describe my
-modifications to the phrase structure grammar to accomodate
-parsing without preprocessing.
+specifier extensions. The following headings describe the modifications
+I made to the phrase structure grammar in order to
+parse preprocessor directives and un-preprocessed C at the same time.
 
 **Note:** These details were ironed out
 after I had written a basic tokenizer, recursive descent
@@ -139,9 +137,374 @@ int bar(int n){
 
 ## Tokenization
 
-For my parser I decided to simply follow the preprocessor lexical grammar in
-the C11 standard. A standard way to write a tokenizer is to define finite state
-machine, because it is both simple to write (though verbose) and performant. This
-is the route I chose to take as well.
+For tokenization I simply followed the lexical grammar in
+the C11 standard. My only modification being that I used the
+unified `preprocessor-number` token type from the preprocessor token
+grammar, because I never needed to distinguish between different kinds of numbers.
 
+I chose to tokenize using a finite state
+machine, since they are performant and simple to write.
+I also processed the entire source file into an array of tokens
+prior to parsing. I initially tokenized ahead of time for simplicity,
+but it ended up being the correct choice performance wise as well.
+My recursive descent parser required frequent backtracking,
+which would have resulted in a lot of repeated tokenization work if the
+tokenizer lazily produced tokens one-at-a-time.
 
+The code excerpts below show how the current tokenizer identifies
+"preprocessor number" tokens, as well as the `.` and `...` punctuator
+tokens. The class of preprocessor number tokens
+includes all valid integer and floating point literals, as
+well as many invalid literals.
+
+```c
+/* ... */
+
+typedef enum {
+    /* ... */
+    AVEN_C_PNC_DOT,
+    AVEN_C_PNC_DOT3,
+    /* ... */
+} AvenCPnc;
+
+/* ... */
+
+typedef enum {
+    AVEN_C_TOKEN_TYPE_NONE = 0,
+    AVEN_C_TOKEN_TYPE_INV,
+    AVEN_C_TOKEN_TYPE_ID,
+    AVEN_C_TOKEN_TYPE_KEY,
+    AVEN_C_TOKEN_TYPE_NUM,
+    AVEN_C_TOKEN_TYPE_CHR,
+    AVEN_C_TOKEN_TYPE_STR,
+    AVEN_C_TOKEN_TYPE_PNC,
+    AVEN_C_TOKEN_TYPE_CMT,
+    AVEN_C_TOKEN_TYPE_PPD,
+    AVEN_C_TOKEN_TYPE_HDR,
+} AvenCTokenType;
+
+typedef struct {
+    AvenCTokenType type;
+    uint32_t index;
+    uint32_t end;
+    uint32_t trailing_lines;
+} AvenCToken;
+typedef Slice(AvenCToken) AvenCTokenSlice;
+typedef List(AvenCToken) AvenCTokenList;
+
+/* ... */
+
+typedef enum {
+    AVEN_C_LEX_STATE_NONE = 0,
+    AVEN_C_LEX_STATE_DONE,
+    /* ... */
+    AVEN_C_LEX_STATE_NUM,
+    AVEN_C_LEX_STATE_NUM_EXP,
+    /* ... */
+    AVEN_C_LEX_STATE_DOT,
+    AVEN_C_LEX_STATE_DOT_DOT,
+    /* ... */
+} AvenCLexState;
+
+typedef struct {
+    AvenStr bytes;
+    AvenCTokenList tokens;
+    AvenCLexState state;
+    uint32_t token_start;
+    uint32_t index;
+    /* ... */
+} AvenCLexCtx
+
+/* ... */
+
+static bool aven_c_lex_step(AvenCLexCtx *ctx) {
+    char c = get(ctx->bytes, ctx->index);
+    switch (ctx->state) {
+        case AVEN_C_LEX_STATE_NONE: {
+            ctx->token_start = ctx->index;
+            switch (c) {
+                case '0':
+                case '1':
+                case '2':
+                case '3':
+                case '4':
+                case '5':
+                case '6':
+                case '7':
+                case '8':
+                case '9': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM;
+                    break;
+                }
+                /* ... */
+                case '.': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_DOT;
+                    break;
+                }
+                /* ... */
+            }
+            break;
+        }
+        /* ... */
+        case AVEN_C_LEX_STATE_NUM: {
+            switch (c) {
+                case '0':
+                /* ... */
+                case '9':
+                case '_':
+                case '.':
+                case 'A':
+                case 'B':
+                case 'C':
+                case 'D':
+                case 'F':
+                /* ... */
+                case 'O':
+                case 'Q':
+                /* ... */
+                case 'Z':
+                case 'a':
+                case 'b':
+                case 'c':
+                case 'd':
+                case 'f':
+                /* ... */
+                case 'o':
+                case 'q':
+                /* ... */
+                case 'z': {
+                    ctx->index += 1;
+                    break;
+                }
+                case 'E':
+                case 'P':
+                case 'e':
+                case 'p': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM_EXP;
+                    break;
+                }
+                default: {
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .index = ctx->token_start,
+                        .end = ctx->index,
+                        .type = AVEN_C_TOKEN_TYPE_NUM,
+                    };
+                    ctx->state = AVEN_C_LEX_STATE_NONE;
+                    break;
+                }
+            }
+            break;
+        }
+        case AVEN_C_LEX_STATE_NUM_EXP: {
+            switch (c) {
+                case '0':
+                /* ... */
+                case '9':
+                case '_':
+                case '.':
+                case 'A':
+                case 'B':
+                case 'C':
+                case 'D':
+                case 'F':
+                /* ... */
+                case 'O':
+                case 'Q':
+                /* ... */
+                case 'Z':
+                case 'a':
+                case 'b':
+                case 'c':
+                case 'd':
+                case 'f':
+                /* ... */
+                case 'o':
+                case 'q':
+                /* ... */
+                case 'z': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM;
+                    break;
+                }
+                case 'E':
+                case 'P':
+                case 'e':
+                case 'p': {
+                    ctx->index += 1;
+                    break;
+                }
+                case '+':
+                case '-': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM;
+                    break;
+                }
+                default: {
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .index = ctx->token_start,
+                        .end = ctx->index,
+                        .type = AVEN_C_TOKEN_TYPE_NUM,
+                    };
+                    ctx->state = AVEN_C_LEX_STATE_NONE;
+                    break;
+                }
+            }
+            break;
+        }
+        /* ... */
+        case AVEN_C_LEX_STATE_DOT: {
+            switch (c) {
+                case '0':
+                case '1':
+                case '2':
+                case '3':
+                case '4':
+                case '5':
+                case '6':
+                case '7':
+                case '8':
+                case '9': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM;
+                    break;
+                }
+                case '.': {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_DOT_DOT;
+                    break;
+                }
+                default: {
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .type = AVEN_C_TOKEN_TYPE_PNC,
+                        .index = ctx->token_start,
+                        .end = AVEN_C_PNC_DOT,
+                    };
+                    ctx->state = AVEN_C_LEX_STATE_NONE;
+                    break;
+                }
+            }
+            break;
+        }
+        case AVEN_C_LEX_STATE_DOT_DOT: {
+            switch (c) {
+                case '0':
+                case '1':
+                case '2':
+                case '3':
+                case '4':
+                case '5':
+                case '6':
+                case '7':
+                case '8':
+                case '9': {
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .type = AVEN_C_TOKEN_TYPE_PNC,
+                        .index = ctx->token_start,
+                        .end = AVEN_C_PNC_DOT,
+                    };
+                    ctx->token_start = ctx->index - 1;
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_NUM;
+                    break;
+                }
+                case '.': {
+                    ctx->index += 1;
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .type = AVEN_C_TOKEN_TYPE_PNC,
+                        .index = ctx->token_start,
+                        .end = AVEN_C_PNC_DOT3,
+                    };
+                    ctx->state = AVEN_C_LEX_STATE_NONE;
+                    break;
+                }
+                default: {
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .type = AVEN_C_TOKEN_TYPE_PNC,
+                        .index = ctx->token_start,
+                        .end = AVEN_C_PNC_DOT,
+                    };
+                    ctx->token_start = ctx->index - 1;
+                    list_push(ctx->tokens) = (AvenCToken){
+                        .type = AVEN_C_TOKEN_TYPE_PNC,
+                        .index = ctx->token_start,
+                        .end = AVEN_C_PNC_DOT,
+                    };
+                    ctx->state = AVEN_C_LEX_STATE_NONE;
+                    break;
+                }
+            }
+            break;
+        }
+        /* ... */
+    }
+    return ctx->state == AVEN_C_LEX_STATE_DONE;
+}
+
+static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
+    /* ... */
+    AvenCLexCtx ctx = {
+        .bytes = bytes,
+        .tokens = aven_arena_create_list(AvenCToken, arena, bytes.len + 2),
+    };
+    /* ... */
+    list_push(ctx.tokens) = (AvenCToken){ .type = AVEN_C_TOKEN_TYPE_NONE };
+    while(!aven_c_lex_step(&ctx)) {}
+    list_push(ctx.tokens) = (AvenCToken){
+        .type = AVEN_C_TOKEN_TYPE_NONE,
+        .index = ctx.token_start,
+        .end = ctx.token_start,
+    };
+    /* ... */
+}
+
+/* ... */
+```
+
+Note that a `NONE` token is inserted before and after the list of "real" tokens.
+Later on, each preprocessor line will be parsed
+into tokens that will be appended to the same initial list.
+Placing a `NONE` token before and after each contiguous
+slice of associated tokens allow each slice to be identified
+from an interior index without any context.
+
+## Parsing
+
+I had written several recursive descent parsers in university, as
+well as a Prolog interpreter using `flex` and `bison`, but that was
+2016. So I decided to pick the most basic design possible and run with
+it as far as I could (spoiler: it worked well enough for the finished
+project).
+
+The basic idea is to walk through the array of tokens one-by-one and
+build an Abstract Syntax Tree (AST) by pushing nodes to the top of
+a stack. Each node would store a type `enum`, an associated
+token index, and left and right child indices. Usually child indices
+would point to child nodes, but for some node types they would instead
+point into an array of associated data.
+
+The parse context would store the current token index, the current
+top of the node stack, and the current top of the data stack. If
+a parse step reaches a point that may require backtracking, it
+can first save the current context index for the token slice,
+node stack, and data stack. Then if any future parse steps fail,
+each context index may be reset to clear all intermediate data.
+
+To get a better idea of what I'm talking about, below is the 
+
+```c
+
+```
+
+[1]: https://nullprogram.com/
+[2]: https://ziglang.org/
+[3]: https://clang.llvm.org/docs/ClangFormat.html
+[4]: https://gitlab.com/saalen/astyle
+[5]: https://www.gnu.org/software/indent/
+[6]: https://ziglang.org/documentation/master/#Source-Encoding
+[7]: https://go.dev/blog/gofmt
+[8]: https://github.com/permutationlock/aven-cfmt
+[9]: https://www.rfleury.com/p/enter-the-arena-talk
+[10]: https://www.hytradboi.com/2025/05c72e39-c07e-41bc-ac40-85e8308f2917-programming-without-pointers
