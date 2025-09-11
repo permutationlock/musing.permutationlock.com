@@ -3,19 +3,20 @@
 .date = @date("2025-07-25T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
-.draft = true,
+.draft = false,
 .custom = {
     "git" : "aven-cfmt"
 },
 ---
 
 I write a lot of C code. In fact, outside of exercising and watching
-movies/YouTube, programming and writing about programming are
-the only things that I regularly do. But formatting my C source
+movies, programming and writing about programming is all
+that I regularly do. However, formatting my C source
 files always felt like a chore.
-None of the existing C auto-formatters were able to produce an output
-that appealed to me. A few months ago, I finally built up the courage
-to write one of my own.
+None of the existing C "pretty printers" were able to produce an output
+that appealed to me, so for years I have manually formatted my code.
+Then, a few months ago, I finally built up the courage
+to write an auto-formatter of my own.
 
 This article covers my
 experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
@@ -25,39 +26,103 @@ three week periods my life.
 **Note:** I will generally discuss the conclusion
 I reached, not the full iterative implementation process. E.g. I describe
 a finite state machine tokenizer that uses
-`switch` statement jump tables, but for the majority of development
-the tokenizer was a sequence of function calls,
-one per token type, each backtracking on failure.
+`switch` statement jump tables, but the tokenizer started as a
+sequence of function calls, one per token type, backtracking on failure.
 
 ## Motivation
 
-I do not come from a traditional C programming background, nor do I write
-traditional C.
-My coding style is based on a lot of trial and error with
-regards to personal productivity. It is heavily inspired by the
-[nullprogram blog][1] and the [Zig][2] programming language. It is far
-from perfect, but it's how I currently enjoy to work on isolated personal
-projects.
+When it comes to C source code formatting, there are three big tools
+available: [clang-format][3], [astyle][4], and [indent][5]. Unfortunately for
+me, all three are designed with a few standard project style guides in mind
+(GNU, Google, LLVM, etc.) and provide very limited configuration beyond that.
 
-In short, I use unity builds (one translation unit), errors as values,
-and slices (e.g. length-based strings). I also prefer to pass structs by value,
-use indices over pointers ([*Programming Without Pointers*][10]),
-and allocate memory from arenas ([*Enter the Arena*][9]).
+While the [list of
+options][11] available to define a style in `clang-format` seems large, it is
+very C++ focused and mainly provides minor tweaks to the
+built-in styles. A couple of years ago I spent many hours tinkering with my
+[`.clang-format`](<$link.asset("clang-format")>) to come up
+with something close to how I "manually" code. Unfortunately, having
+a tool be consistently "almost right" felt worse than formatting by hand.
 
-When it comes to C source code formatting, there are a few common options
-available: [clang-format][3], [astyle][4], and [indent][5]. Almost all of
-these are designed with a classical C (or worse C++) style in mind.
-None support a modern style along the lines of [`zig fmt`][6].
+I like all expressions,
+parenthesis, and braces to break across lines in a
+consistent manner. I was able to configure `clang-format` to
+break initializer lists and function
+calls, definitions, and declarations in exactly the way I wanted.
+
+```c
+// lines longer than 80 columns break before initial "element", after
+// each separating operator, and after final "element"
+int foo(
+    int param1,
+    int param2,
+    int param3,
+    int param4,
+    int param5,
+    int param6,
+    int param7
+);
+
+int foo(
+    int param1,
+    int param2,
+    int param3,
+    int param4,
+    int param5,
+    int param6,
+    int param7
+) {
+    return param1 + param2 + param3 + param4 + param5 + param6 + param7;
+}
+
+int arr[] = {
+    element1,
+    element2,
+    element3,
+    element4,
+    element5,
+    element6,
+    element7,
+};
+```
+
+But `clang-format` broke this consistency when it came to expressions
+and other parenthesised statements. For example, it refused to break the
+conditional expression of an `if` statement to match the style above.
+
+```c
+// what I want (and what aven-cfmt produces)
+if (
+    condition_one ||
+    condition_two ||
+    condition_three ||
+    condition_four ||
+    condition_five
+) {
+    // body
+}
+
+// what clang-format will produce
+if (condition_one || condition_two || condition_three || condition_four ||
+    condition_five) {
+    // body
+}
+```
+
+So I had three options: switch to follow an established style guide, manually format
+my code, or write an auto-formatter myself. For or a long time I chose to
+stick with the second option.
+This article describes how I finally made the switch to the third.
 
 ## C is hard to parse
 
-One of the reasons I love C is that it's such a simple language.
+The main reason I love C is that it's a very simple language.
 One of the C11 compilers I use is written in under 10k lines of C99 code.
-It is seems almost paradoxical, then, that parsing an isolated C source
+It seems almost paradoxical, then, that parsing an isolated C source
 file might be an impossible task.
 
 The big issue is, of course, the preprocessor. The existence of `#define`
-directives means that identifiers and function invocations
+means that identifiers and function invocations
 may be replaced by arbitrary strings of tokens.
 Even worse, `#include` directives search a list of paths for
 files to be pasted directly into the current source,
@@ -78,8 +143,8 @@ Almost all source code formatters that I'm aware of choose the second option.
 The first reason for this is that hueristics are quite accurate
 for most source code that is practically encountered. But, in my eyes,
 the most compelling reason to avoid the first option is usability.
-If the formatter requires full knowledge of include paths and built-in
-compiler macros (including macros provided by build flags, e.g. `-D`
+If the formatter requires full knowledge of include paths and
+compiler built-ins (including macros provided by build flags, e.g. `-D`
 for `gcc`/`clang`),
 then either each user's
 build system must provide such information to the formatter, or
@@ -132,6 +197,71 @@ int foo(int n) {
 int bar(int n){
 #endif
     // body
+}
+```
+
+## Coding style
+
+This section is intended to serve as a crash
+course on how to read the `aven-cfmt` source code.
+My coding style is based on a lot of trial and error with
+regards to personal productivity. It is heavily inspired by the
+[nullprogram blog][1] and the [Zig][2] programming language.
+
+In short, I use unity builds (one translation unit), errors as values,
+and slices (e.g. length-based strings). I also prefer to pass structs by value,
+use indices over pointers ([*Programming Without Pointers*][10]),
+and allocate memory from arenas ([*Enter the Arena*][9]).
+
+I make frequent use of the following macros.
+
+```c
+// my countof is variadic to accommodate e.g. countof((T[]){ t1, t2, t3 })
+// ... whether this was a good idea remains to be determined.
+#define countof(...) ((sizeof(__VA_ARGS__)) / (sizeof(*(__VA_ARGS__)))
+
+#define Optional(t) struct { \
+        t value; \
+        uint8_t valid; \
+    }
+#define unwrap(o) (assert((o).valid), (o).value)
+
+#define Slice(t) struct { \
+        t *ptr; \
+        size_t len; \
+    }
+#define get(s, i) (s).ptr[(assert((i) < (s).len), i)]
+
+#define List(t) struct { \
+        t *ptr; \
+        size_t len; \
+        size_t cap; \
+    }
+#define list_push(l) (l).ptr[(assert((l).len < (l).cap), (l).len++)]
+#define list_pop(l) (l).ptr[(assert((l).len > 0), --(l).len)]
+```
+
+There are many critiques that can be leveled at the above definitions, I
+have many of my own in mind, but practically I just love working with them.
+They've allowed me to be very productive
+and provide fantastic debug output when I use a debugger friendly assert; see
+below.
+```c
+#define assert(c) ((!(c)) ? __builtin_unreachable() : (void)0)
+```
+With `-fsanitize-trap` and `-fsanitize=unreachable`,
+`__builtin_unreachable()` becomes `__builtin_trap()`. If
+`get` or `list_push`/`list_pop` attempt to access an index outside the bounds
+of a given slice/list, then the debugger will trap on the offending line
+of code.
+
+The other macros from [`libaven`][12] used in this article should be
+self explanatory. E.g. the code below allocates a `List(int)` with `n`
+capacity from the given `arena` memory.
+```c
+void foo(AvenArena *arena, size_t n) {
+    List(int) nums = aven_arena_create_list(int, arena, n);
+    // ...
 }
 ```
 
@@ -467,7 +597,7 @@ Note that a `NONE` token is inserted before and after the list of "real" tokens.
 Later on, each preprocessor line will be parsed
 into tokens that will be appended to the same initial list.
 Placing a `NONE` token before and after each contiguous
-slice of associated tokens allow each slice to be identified
+slice of associated tokens allows each slice to be identified
 from an interior index without any context.
 
 ## Parsing
@@ -475,22 +605,21 @@ from an interior index without any context.
 I had written several recursive descent parsers in university, as
 well as a Prolog interpreter using `flex` and `bison`, but that was
 2016. So I decided to pick the most basic design possible and run with
-it as far as I could (spoiler: it worked well enough for the finished
-project).
+it as far as I could (spoiler: it's in the finished product).
 
-The basic idea is to walk through the array of tokens one-by-one and
+The basic idea was to walk through the array of tokens one-by-one and
 build an Abstract Syntax Tree (AST) by pushing nodes to the top of
 a stack. Each node would store a type `enum`, an associated
 token index, and left and right child indices. Usually child indices
 would point to child nodes, but for some node types they would instead
-point into an array of associated data.
+point to a slice of associated data stored in a separate stack.
 
 The parse context would store the current token index, the current
 top of the node stack, and the current top of the data stack. If
-a parse step reaches a point that may require backtracking, it
-can first save the current context index for the token slice,
-node stack, and data stack. Then if any future parse steps fail,
-each context index may be reset to clear all intermediate data.
+a parse step reached a point that might require backtracking, it
+would save the current context index for the token slice,
+node stack, and data stack. If any future parse steps failed, then
+each stack top would be reset to clear all intermediate data.
 
 To get a better idea of what I'm talking about, below is the 
 
@@ -508,3 +637,5 @@ To get a better idea of what I'm talking about, below is the
 [8]: https://github.com/permutationlock/aven-cfmt
 [9]: https://www.rfleury.com/p/enter-the-arena-talk
 [10]: https://www.hytradboi.com/2025/05c72e39-c07e-41bc-ac40-85e8308f2917-programming-without-pointers
+[11]: https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+[12]: https://github.com/permutationlock/libaven
