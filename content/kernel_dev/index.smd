@@ -1,0 +1,49 @@
+---
+.title = "Debugging Linux Kernel Modules",
+.date = @date("2025-09-23T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = false,
+.custom = {},
+---
+
+I have been a Linux user space programmer for well over ten years, but only
+recently did I take my first steps into kernel module development.
+In this article I'll go over Linux system emulation
+(`qemu`, `toybox`/`busybox`), the basics of the Linux kernel build system
+(`KBuild`), the structure of a kernel module C project,
+the key kernel module utilities (`insmod`, `rmmod`, `modprobe`),
+and debugging code that runs in kernel space (`kdb`, `gdb`).
+
+## Requirements
+
+I will assume that we are working on a modern Linux system. You will need
+GNU [`make`][9] and a C toolchain, either from GNU ([`binutils`][3],
+[`gcc`][4]) or LLVM ([`clang`][5], [`lld`][6]). Note that if you are working on
+existing projects, I've run into a lot of warnings and errors when building
+everything in LLVM mode.
+
+For system emulation you will need [`qemu`][1] and the
+specific `qemu-system-xxx` for the architecture you wish to emulate.
+If you want to take advantage
+of [KVM][2], the emulated system architecture should match your
+physical hardware; e.g. if you have an `x86_64` CPU, then you should
+install and use `qemu-system-x86_64`.
+
+Finally, to debug kernel space code you will need the GNU debugger ([`gdb`][7]).
+The Kernel python scripts and
+`qemu`'s debug server only support `gdb`, so even if you chose LLVM for your
+C compiler and linker, [`lldb`][8] is not an option.
+
+### Building the Linux kernel
+
+
+
+[1]: https://www.qemu.org/
+[2]: https://en.wikipedia.org/wiki/Kernel-based_Virtual_Machine
+[3]: https://www.gnu.org/software/binutils/
+[4]: https://www.gnu.org/software/gcc/
+[5]: https://clang.llvm.org/
+[6]: https://lld.llvm.org/
+[7]: https://www.sourceware.org/gdb/
+[8]: https://lldb.llvm.org/
