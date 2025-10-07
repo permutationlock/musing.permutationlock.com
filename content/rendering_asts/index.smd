@@ -605,7 +605,7 @@ from an interior index without any context.
 
 ### Improving state machine performance with `goto`
 
-Recently I changed the tokenizer to use `goto` to directly jump beteen
+Recently I changed the tokenizer to use `goto` to directly jump between
 states, rather than modifying the `ctx->state` member and runnning
 `aven_c_lex_step` in a loop. The major benefit of this method is
 that the destination of each jump instrcution is hardcoded, rather than determined
@@ -2553,7 +2553,7 @@ under the node into the remaining space in the line buffer. If the text cannot f
 require a line break, then the current "line break state" `split` is checked. If `split` is false,
 then the line buffer is reset and failure is returned. If `split` is `true`,
 then we try to render the subtree again, this time with `split` set to `true`
-all recursive calls on the subtree to allow the
+for the subtree to allow the
 line buffer to be flushed and text split accross lines.
 
 ```c
