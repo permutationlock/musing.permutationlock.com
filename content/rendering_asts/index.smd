@@ -9,25 +9,10 @@
 },
 ---
 
-I write a lot of C code. In fact, outside of exercising and watching
-movies, programming and writing about programming is all
-that I regularly do. However, formatting my C source
-files always felt like a chore.
-None of the existing C "pretty printers" were able to produce an output
-that appealed to me, so for years I have manually formatted my code.
-Then, a few months ago, I finally built up the courage
-to write an auto-formatter of my own.
-
 This article covers my
 experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
 C parser and renderer. It was one of the most fun and productive
 three week periods my life.
-
-**Note:** I will generally discuss the conclusion
-I reached, not the full iterative implementation process. E.g. I describe
-a finite state machine tokenizer that uses
-`switch` statement jump tables, but the tokenizer started as a
-sequence of function calls, one per token type, backtracking on failure.
 
 ## Motivation
 
@@ -39,7 +24,7 @@ me, all three are designed with a few standard project style guides in mind
 While the [list of
 options][11] available to define a style in `clang-format` seems large, it is
 very C++ focused and largely provides minor tweaks to the
-built-in styles. A couple of years ago I spent many hours tinkering with my
+built-in styles. A couple of years ago I spent hours tinkering with my
 [`.clang-format`](<$link.asset("clang-format")>) to come up
 with something close to how I "manually" code. But having
 a tool consistently be "almost right" felt worse than formatting by hand.
@@ -87,8 +72,8 @@ int arr[] = {
 };
 ```
 
-But `clang-format` broke this consistency when it came to expressions
-and other parenthesised statements. For example, it refused to break the
+But `clang-format` breaks this consistency when it comes to expressions
+and other parenthesised statements. For example, it refuses to break a
 conditional expression of an `if` statement to match the style above.
 
 ```c
@@ -109,11 +94,6 @@ if (condition_one || condition_two || condition_three || condition_four ||
     // body
 }
 ```
-
-So I had three options: switch to follow an established style guide, continue
-formatting by hand, or write a formatter tool myself. For or a long time I chose to
-stick with the second option.
-This article describes how I finally made the switch option three.
 
 ## C is hard to parse
 
@@ -218,7 +198,7 @@ I make frequent use of the following macros.
 
 ```c
 // my countof is variadic to accommodate e.g. countof((T[]){ t1, t2, t3 })
-// ... whether this was a good idea remains to be determined.
+// whether this was a good idea remains to be determined
 #define countof(...) ((sizeof(__VA_ARGS__)) / (sizeof(*(__VA_ARGS__)))
 
 #define Optional(t) struct { \
@@ -243,7 +223,7 @@ I make frequent use of the following macros.
 ```
 
 There are many critiques that can be leveled at the above definitions, I
-have several of my own in mind, but practically I just love working with them.
+have several of my own in mind, but practically I love working with them.
 They've allowed me to be very productive
 and provide fantastic debug output when I use a debugger friendly assert; see
 below.
@@ -271,22 +251,22 @@ void foo(AvenArena *arena, size_t n) {
 For tokenization I simply followed the lexical grammar in
 the C11 standard. My only modification being that I used the
 unified `preprocessor-number` token type from the preprocessor token
-grammar, because I never needed to distinguish between different kinds of numbers.
+grammar because I never needed to distinguish between different kinds of numbers.
 
 I chose to tokenize using a finite state
-machine, since they are performant and simple to write.
+machine since they are performant and simple to write.
 I also processed the entire source file into an array of tokens
 prior to parsing. I initially tokenized ahead of time for simplicity,
 but it ended up being the correct choice performance wise as well.
-My recursive descent parser required frequent backtracking,
+My recursive descent parser requires frequent backtracking,
 which would have resulted in a lot of repeated tokenization work if the
 tokenizer lazily produced tokens one-at-a-time.
 
 The code excerpts below show how the current tokenizer identifies
 "preprocessor number" tokens, as well as the `.` and `...` punctuator
 tokens. The class of preprocessor number tokens
-includes all valid integer and floating point literals, as
-well as many invalid literals.
+includes all valid integer and floating point literals (as
+well as many invalid literals).
 
 ```c
 /* ... */
@@ -356,13 +336,7 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
             switch (c) {
                 case '0':
                 case '1':
-                case '2':
-                case '3':
-                case '4':
-                case '5':
-                case '6':
-                case '7':
-                case '8':
+                /* ... */
                 case '9': {
                     ctx->index += 1;
                     ctx->state = AVEN_C_LEX_STATE_NUM;
@@ -375,6 +349,15 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
                     break;
                 }
                 /* ... */
+                case 0: {
+                    ctx->state = AVEN_C_LEX_STATE_DONE;
+                    break;
+                }
+                default: {
+                    ctx->index += 1;
+                    ctx->state = AVEN_C_LEX_STATE_INV;
+                    break;
+                }
             }
             break;
         }
@@ -382,6 +365,7 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
         case AVEN_C_LEX_STATE_NUM: {
             switch (c) {
                 case '0':
+                case '1':
                 /* ... */
                 case '9':
                 case '_':
@@ -391,9 +375,11 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
                 case 'C':
                 case 'D':
                 case 'F':
+                case 'G':
                 /* ... */
                 case 'O':
                 case 'Q':
+                case 'R':
                 /* ... */
                 case 'Z':
                 case 'a':
@@ -401,9 +387,11 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
                 case 'c':
                 case 'd':
                 case 'f':
+                case 'g':
                 /* ... */
                 case 'o':
                 case 'q':
+                case 'r':
                 /* ... */
                 case 'z': {
                     ctx->index += 1;
@@ -432,6 +420,7 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
         case AVEN_C_LEX_STATE_NUM_EXP: {
             switch (c) {
                 case '0':
+                case '1':
                 /* ... */
                 case '9':
                 case '_':
@@ -441,9 +430,11 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
                 case 'C':
                 case 'D':
                 case 'F':
+                case 'G':
                 /* ... */
                 case 'O':
                 case 'Q':
+                case 'R':
                 /* ... */
                 case 'Z':
                 case 'a':
@@ -451,9 +442,11 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
                 case 'c':
                 case 'd':
                 case 'f':
+                case 'g':
                 /* ... */
                 case 'o':
                 case 'q':
+                case 'r':
                 /* ... */
                 case 'z': {
                     ctx->index += 1;
@@ -490,13 +483,7 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
             switch (c) {
                 case '0':
                 case '1':
-                case '2':
-                case '3':
-                case '4':
-                case '5':
-                case '6':
-                case '7':
-                case '8':
+                /* ... */
                 case '9': {
                     ctx->index += 1;
                     ctx->state = AVEN_C_LEX_STATE_NUM;
@@ -523,13 +510,7 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
             switch (c) {
                 case '0':
                 case '1':
-                case '2':
-                case '3':
-                case '4':
-                case '5':
-                case '6':
-                case '7':
-                case '8':
+                /* ... */
                 case '9': {
                     list_push(ctx->tokens) = (AvenCToken){
                         .type = AVEN_C_TOKEN_TYPE_PNC,
@@ -570,6 +551,19 @@ static bool aven_c_lex_step(AvenCLexCtx *ctx) {
             break;
         }
         /* ... */
+        case AVEN_C_LEX_STATE_INV: {
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_INV,
+                .index = ctx->token_start,
+                .end = ctx->index,
+            };
+            ctx->state = AVEN_C_LEX_STATE_DONE;
+            ctx->token_start = ctx->index;
+            break;
+        }
+        case AVEN_C_LEX_STATE_DONE: {
+            break;
+        }
     }
     return ctx->state == AVEN_C_LEX_STATE_DONE;
 }
@@ -589,6 +583,14 @@ static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
         .end = ctx.token_start,
     };
     /* ... */
+    return (AvenCTokenSet){
+        .bytes = bytes,
+        .tokens = aven_arena_commit_list_to_slice(
+            AvenCTokenSlice,
+            arena,
+            ctx.tokens
+        ),
+    };
 }
 
 /* ... */
@@ -600,6 +602,264 @@ into tokens that will be appended to the same initial list.
 Placing a `NONE` token before and after each contiguous
 slice of associated tokens allows each slice to be identified
 from an interior index without any context.
+
+### Improving state machine performance with `goto`
+
+Recently I changed the tokenizer to use `goto` to directly jump beteen
+states, rather than modifying the `ctx->state` member and runnning
+`aven_c_lex_step` in a loop. The major benefit of this method is
+that the destination of each jump instrcution is hardcoded, rather than determined
+by the runtime variable `ctx->state`. Modern processors are fairly
+good at predicting jumps like this, but I noticed that the Zig tokenizer
+used direct state jumps and decided to
+try it out.
+
+```c
+typedef struct {
+    AvenStr bytes;
+    AvenCTokenList tokens;
+    uint32_t token_start;
+    uint32_t index;
+    /* ... */
+} AvenCLexCtx;
+
+static void aven_c_lex_step(AvenCLexCtx *ctx) {
+AVEN_C_LEX_STATE_NONE:
+    ctx->token_start = ctx->index;
+    switch (get(ctx->bytes, ctx->index)) {
+        case '0':
+        case '1':
+        /* ... */
+        case '9': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        /* ... */
+        case 0: {
+            goto AVEN_C_LEX_STATE_DONE;
+        }
+        default: {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_INV;
+        }
+    }
+    /* ... */
+AVEN_C_LEX_STATE_NUM:
+    switch (get(ctx->bytes, ctx->index)) {
+        case '0':
+        case '1':
+        /* ... */
+        case '9':
+        case '_':
+        case '.':
+        case 'A':
+        case 'B':
+        /* ... */
+        case 'Z':
+        case 'a':
+        case 'b':
+        /* ... */
+        case 'z': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        case 'E':
+        case 'e':
+        case 'P':
+        case 'p': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM_EXP;
+        }
+        default: {
+            list_push(ctx->tokens) = (AvenCToken){
+                .index = ctx->token_start,
+                .end = ctx->index,
+                .type = AVEN_C_TOKEN_TYPE_NUM,
+            };
+            goto AVEN_C_LEX_STATE_NONE;
+        }
+    }
+AVEN_C_LEX_STATE_NUM_EXP:
+    switch (get(ctx->bytes, ctx->index)) {
+        case '0':
+        case '1':
+        case '2':
+        /* ... */
+        case '9':
+        case '_':
+        case '.':
+        case 'A':
+        case 'B':
+        case 'C':
+        case 'D':
+        case 'F':
+        case 'G':
+        /* ... */
+        case 'O':
+        case 'Q':
+        case 'R':
+        /* ... */
+        case 'Z':
+        case 'a':
+        case 'b':
+        case 'c':
+        case 'd':
+        case 'f':
+        case 'g':
+        /* ... */
+        case 'o':
+        case 'q':
+        case 'r':
+        /* ... */
+        case 'z': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        case 'E':
+        case 'e':
+        case 'P':
+        case 'p': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM_EXP;
+        }
+        case '+':
+        case '-': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        default: {
+            list_push(ctx->tokens) = (AvenCToken){
+                .index = ctx->token_start,
+                .end = ctx->index,
+                .type = AVEN_C_TOKEN_TYPE_NUM,
+            };
+            goto AVEN_C_LEX_STATE_NONE;
+        }
+    }
+AVEN_C_LEX_STATE_DOT:
+    switch (get(ctx->bytes, ctx->index)) {
+        case '0':
+        case '1':
+        /* ... */
+        case '9': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        case '.': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_DOT_DOT;
+        }
+        default: {
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_PNC,
+                .index = ctx->token_start,
+                .end = AVEN_C_PNC_DOT,
+            };
+            goto AVEN_C_LEX_STATE_NONE;
+        }
+    }
+AVEN_C_LEX_STATE_DOT_DOT:
+    switch (get(ctx->bytes, ctx->index)) {
+        case '0':
+        case '1':
+        /* ... */
+        case '9': {
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_PNC,
+                .index = ctx->token_start,
+                .end = AVEN_C_PNC_DOT,
+            };
+            ctx->token_start = ctx->index - 1;
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_NUM;
+        }
+        case '.': {
+            ctx->index += 1;
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_PNC,
+                .index = ctx->token_start,
+                .end = AVEN_C_PNC_DOT3,
+            };
+            goto AVEN_C_LEX_STATE_NONE;
+        }
+        default: {
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_PNC,
+                .index = ctx->token_start,
+                .end = AVEN_C_PNC_DOT,
+            };
+            ctx->token_start = ctx->index - 1;
+            list_push(ctx->tokens) = (AvenCToken){
+                .type = AVEN_C_TOKEN_TYPE_PNC,
+                .index = ctx->token_start,
+                .end = AVEN_C_PNC_DOT,
+            };
+            goto AVEN_C_LEX_STATE_NONE;
+        }
+    }
+    /* ... */
+AVEN_C_LEX_STATE_INV:
+    list_push(ctx->tokens) = (AvenCToken){
+        .type = AVEN_C_TOKEN_TYPE_INV,
+        .index = ctx->token_start,
+        .end = ctx->index,
+    };
+    ctx->token_start = ctx->index;
+    goto AVEN_C_LEX_STATE_DONE;
+AVEN_C_LEX_STATE_DONE:
+    return;
+}
+
+static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
+    /* ... */
+    AvenCLexCtx ctx = {
+        .bytes = bytes,
+        .tokens = aven_arena_create_list(AvenCToken, arena, bytes.len + 2),
+    };
+    /* ... */
+    list_push(ctx.tokens) = (AvenCToken){ .type = AVEN_C_TOKEN_TYPE_NONE };
+    aven_c_lex_step(&ctx);
+    list_push(ctx.tokens) = (AvenCToken){
+        .type = AVEN_C_TOKEN_TYPE_NONE,
+        .index = ctx.token_start,
+        .end = ctx.token_start,
+    };
+    /* ... */
+    return (AvenCTokenSet){
+        .bytes = bytes,
+        .tokens = aven_arena_commit_list_to_slice(
+            AvenCTokenSlice,
+            arena,
+            ctx.tokens
+        ),
+    };
+}
+```
+
+The `goto` implementation had a surprisingly big performance benefit
+according to the benchmarks I ran on my the Intel N100 Linux box.
+
+```bash
+$ poop "./aven-ctokenize-loop ../raylib/src/rcore.c" "./aven-ctokenize-goto ../raylib/src/rcore.c"
+Benchmark 1 (1452 runs): ./aven-ctokenize-loop ../raylib/src/rcore.c
+  measurement          mean ± σ            min … max           outliers         delta
+  wall_time          3.40ms ±  384us    2.25ms … 6.36ms        172 (12%)        0%
+  peak_rss           1.25MB ±    0      1.25MB … 1.25MB          0 ( 0%)        0%
+  cpu_cycles         6.12M  ±  155K     5.90M  … 6.80M           2 ( 0%)        0%
+  instructions       12.5M  ±  201      12.5M  … 12.5M         468 (32%)        0%
+  cache_references   4.16K  ± 1.87K     2.76K  … 19.7K         126 ( 9%)        0%
+  cache_misses        532   ±  159       371   … 2.66K         111 ( 8%)        0%
+  branch_misses      78.8K  ± 4.64K     72.2K  … 93.8K           0 ( 0%)        0%
+Benchmark 2 (1749 runs): ./aven-ctokenize-goto ../raylib/src/rcore.c
+  measurement          mean ± σ            min … max           outliers         delta
+  wall_time          2.82ms ±  304us    1.82ms … 4.17ms        427 (24%)        - 17.1% ±  0.7%
+  peak_rss           1.29MB ±    0      1.29MB … 1.29MB          0 ( 0%)        +  2.9% ±  0.0%
+  cpu_cycles         4.61M  ± 34.3K     4.57M  … 4.99M         146 ( 8%)        - 24.6% ±  0.1%
+  instructions       8.54M  ±  208      8.54M  … 8.54M           0 ( 0%)        - 31.8% ±  0.0%
+  cache_references   4.08K  ± 2.04K     2.75K  … 23.7K         139 ( 8%)        -  2.0% ±  3.3%
+  cache_misses        524   ±  260       356   … 7.27K         125 ( 7%)        -  1.6% ±  2.9%
+  branch_misses      71.6K  ± 1.09K     68.9K  … 78.3K          97 ( 6%)        -  9.1% ±  0.3%
+```
 
 ## Parsing
 
@@ -2197,10 +2457,10 @@ described in section 6.5 of the [standard][13].
 The `ctx->error` member stores
 the furthest token index where a parse error occurred, along with some information
 about the expected token. This rudimentary error tracking provides surprisingly
-effective error reports in practice.
+useful error reports in practice.
 
-Note that in a few places parsing
-is conditioned on the value `ctx->ppd`. The `ctx->ppd` member indicates whether
+Note that parsing is conditioned on `ctx->ppd` in a few places.
+The `ctx->ppd` member indicates whether
 the AST is in "preprocessor mode," that is, whether the associated token stream
 was constructed from the right hand side of a preprocessor directive.
 For example, the `##` operator is only allowed when
@@ -2208,15 +2468,25 @@ parsing an identifier in preprocessor mode.
 
 ## Parsing and tokenizing preprocessor code
 
-Above we mentioned that each preprocessor directive
+Above I mentioned that each preprocessor directive
 line will be tokenized into a separate slice. To accomplish this, the main
 tokenizer state machine produces a single `AVEN_C_TOKEN_TYPE_PPD` for each line
-that starts with a `#`. A subsequent pass of the tokenizer is then run on the token
-text of each token of type `AVEN_C_TOKEN_TYPE_PPD` to produce a separate token
-slice. The original token then swaps its `index` and `end` members to indicate
+that starts with a `#`. A subsequent pass of the tokenizer is then run on the
+text of each token of type `AVEN_C_TOKEN_TYPE_PPD`.
+The original token then swaps its `index` and `end` members to indicate
 the start and end index of the associated token slice in the token list.
 
 ```c
+typedef struct {
+    AvenStr bytes;
+    AvenCTokenList tokens;
+    uint32_t token_start;
+    uint32_t index;
+    bool ppd;
+} AvenCLexCtx;
+
+/* ... */
+
 static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
     /* ... */
     AvenCLexCtx ctx = {
@@ -2225,7 +2495,7 @@ static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
     };
     /* ... */
     list_push(ctx.tokens) = (AvenCToken){ .type = AVEN_C_TOKEN_TYPE_NONE };
-    while(!aven_c_lex_step(&ctx)) {}
+    aven_c_lex_step(&ctx);
     list_push(ctx.tokens) = (AvenCToken){
         .type = AVEN_C_TOKEN_TYPE_NONE,
         .index = ctx.token_start,
@@ -2244,7 +2514,7 @@ static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
                 .ppd = true,
                 .index = token->index,
             };
-            while (!aven_c_lex_step(&ppd_ctx)) {}
+            aven_c_lex_step(&ppd_ctx);
             list_push(ppd_ctx.tokens) = (AvenCToken){
                 .type = AVEN_C_TOKEN_TYPE_NONE,
                 .index = ppd_ctx.token_start,
@@ -2274,16 +2544,17 @@ disjoint trees.
 
 ## Rendering
 
-The render is essentially a recursive descent parser in reverse. Its context stores
-a `writer` (a interface to push the text to the output) and a line buffer (a slice of
+The renderer is essentially a recursive descent parser in reverse. Its context stores
+a `writer` (an interface to push the text to an output file or buffer) and a line buffer (a slice of
 characters and the index of the last written character).
 
-Given an AST node, the renderer attempts to write the corresponding text into the
-remaining space in the line buffer. If the text cannot fit, or rendering rules
-require a line break, then the current "line break state" `split` is checked. If `split` is true,
-e.g. we already tried to render this line without breaking, then the line buffer is flushed
-to the writer and the node is re-tried with an empty line buffer. Otherwise, the line buffer
-is reset and a failure is returned.
+Given an AST node, the renderer attempts to write the text corresponding to the subtree
+under the node into the remaining space in the line buffer. If the text cannot fit, or rendering rules
+require a line break, then the current "line break state" `split` is checked. If `split` is false,
+then the line buffer is reset and failure is returned. If `split` is `true`,
+then we try to render the subtree again, this time with `split` set to `true`
+all recursive calls on the subtree to allow the
+line buffer to be flushed and text split accross lines.
 
 ```c
 static bool aven_c_ast_render_node(
@@ -3692,7 +3963,12 @@ static bool aven_c_ast_render_data_surround_try_internal(
 Note that preprocessor directives and comments are only rendered when `split` is `true`
 because they generally must appear on a separate line. The only exception is that
 a single comment token may be rendered at the end of a line if it also appeared
-that way in the original text.
+that way in the original text (see below).
+
+```c
+int x = 0; // a single trailing comment is allowed
+int y = 5; /* to render after a statement */
+```
 
 [1]: https://nullprogram.com/
 [2]: https://ziglang.org/

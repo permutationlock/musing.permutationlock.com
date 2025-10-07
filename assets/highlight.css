@@ -62,6 +62,10 @@ code.c .string {
   color: var(--string);
 }
 
+code.c .label {
+  color: var(--keyword);
+}
+
 code.c .comment{
   color: var(--comment);
 }
