@@ -1,5 +1,5 @@
 ---
-.title = "Parsing and Rendering C Code",
+.title = "Parsing and Rendering C",
 .date = @date("2025-09-11T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -11,8 +11,7 @@
 
 This article covers my
 experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
-C parser and renderer. It was one of the most fun and productive
-three week periods my life.
+C parser and renderer.
 
 ## Motivation
 
@@ -125,11 +124,11 @@ The first reason for this is that hueristics are quite accurate
 for most source code that is practically encountered. But, in my eyes,
 the most compelling reason to avoid the first option is usability.
 If the formatter requires full knowledge of include paths and
-compiler built-ins (including macros provided by build flags, e.g. `-D`
-for `gcc`/`clang`),
-then either each user's
+compiler built-ins, then either each user's
 build system must provide such information to the formatter, or
 the formatter must be able to understand each user's build system.
+Moreover, this could result in the formatting of each file being
+dependent on the build environment!
 
 ### My subset of C
 
@@ -175,7 +174,7 @@ according to `aven-cfmt`.
 #ifdef A
 int foo(int n) {
 #else
-int bar(int n){
+int bar(int n) {
 #endif
     // body
 }
@@ -866,7 +865,7 @@ Benchmark 2 (1749 runs): ./aven-ctokenize-goto ../raylib/src/rcore.c
 I had written several recursive descent parsers in university, as
 well as a Prolog interpreter using `flex` and `bison`, but that was
 2016. So I decided to pick the most basic design possible and run with
-it as far as I could (spoiler: it's in the finished product).
+it as far as I could (spoiler: it became the finished product).
 
 The idea is to walk through the array of tokens one-by-one and
 build an Abstract Syntax Tree (AST) by pushing nodes to the top of
@@ -880,7 +879,7 @@ top of the node stack, and the current top of the data stack. If
 a parse step reaches a point that may require backtracking, it
 saves the current context index for the token slice,
 node stack, and data stack. If any future parse steps fail, then
-each stack top is reset to clear all intermediate progress.
+each index is reset to clear all intermediate progress.
 
 To get a better idea of what I'm talking about, below are the
 AST structures and their basic operations.
@@ -1133,8 +1132,9 @@ will each be an index of a child node in the `nodes` list.
 However, some node types will use `lhs` and/or `rhs`
 to index to a slice of `uint32_t`s in the `data` list. Such slices
 are initially constructed in the `scratch` list by calling `aven_c_ast_scratch_init`
-and then pushing each element with `aven_c_ast_scratch_push`. The scratch
-slice is then "committed" to the data list with `aven_c_ast_scratch_commit`.
+and then pushing each element to `scratch` with `list_push`. The
+slice is then "committed" fromt the scratch list to the data list with
+`aven_c_ast_scratch_commit`.
 
 Additionally, some node types are constructed from more than one significant token
 and use the `data` list to store a slice of token indices. In such cases
@@ -1142,9 +1142,9 @@ the `token` member of the node is an index into the
 `data` list, rather than into the token slice.
 
 When the parser reaches a point where backtracking may be required, the
-context state is saved to a local variable with `aven_c_ast_save`. Then,
-if the parser needs to backtrack, one of `aven_c_ast_restore`, `aven_c_ast_restore_trap`,
-or `aven_c_ast_error`. If parsing should continue from the saved state no
+context state is saved to a local variable with `aven_c_ast_save`.
+If the parser needs to backtrack, one of `aven_c_ast_restore`, `aven_c_ast_restore_trap`,
+or `aven_c_ast_error` may be used. If parsing should continue from the saved state no
 matter the next token, `aven_c_ast_restore` is called. If parsing should
 be resumed from the saved state as long as the next token is not the end of the
 token stream, then `aven_c_ast_restore_trap` is called. Finally, if parsing
@@ -2455,7 +2455,7 @@ It may be useful to compare the above code with the phrase structure grammar
 described in section 6.5 of the [standard][13].
 
 The `ctx->error` member stores
-the furthest token index where a parse error occurred, along with some information
+the furthest token index where a parse error occurred, along with information
 about the expected token. This rudimentary error tracking provides surprisingly
 useful error reports in practice.
 
@@ -2538,15 +2538,16 @@ static AvenCTokenSet aven_c_lex(AvenStr bytes, AvenArena *arena) {
 ```
 
 The recursive descent parser is run separately on each token slice,
-setting `ctx->ppd` to `true` for preprocessor. The primary AST and each
+setting `ctx->ppd` to `true` for all tokens other than the
+primary translation unit AST. The primary AST and each
 preprocessor AST are stored in the same `nodes` and `data` lists, but form
 disjoint trees.
 
 ## Rendering
 
 The renderer is essentially a recursive descent parser in reverse. Its context stores
-a `writer` (an interface to push the text to an output file or buffer) and a line buffer (a slice of
-characters and the index of the last written character).
+a `writer` (an interface to push data to a sink, e.g. a file or memory buffer) and a
+line buffer (a slice of characters and the index of the last written character).
 
 Given an AST node, the renderer attempts to write the text corresponding to the subtree
 under the node into the remaining space in the line buffer. If the text cannot fit, or rendering rules
@@ -3029,7 +3030,15 @@ either reset the state and return false (if `split` is `false`) or attempt to re
 allowing line breaks and fail permantly if that doesn't work (if `split` is `true`).
 The `_surround` macros each
 render the given node/data surrounded by the given open and close tokens, breaking and indenting
-accordingly. The relevant code is provided below, but be warned that it is fairly ugly.
+accordingly.
+
+The `_force` macro renders a token regardless of column fit in order to allow
+terminating `;` or bracket characters to not break rendering logic. This allows lines to
+go one or two characters beyond the column limit, but this occurs rarely in practtice.
+
+The relevant code is provided below, but be warned that it is fairly ugly. Maybe I'll
+re-write the renderer one day, but it is fast and functional so it's hard to
+justify a full overhaul just to improve the coding style.
 
 ```c
 typedef struct {
@@ -3961,13 +3970,13 @@ static bool aven_c_ast_render_data_surround_try_internal(
 ```
 
 Note that preprocessor directives and comments are only rendered when `split` is `true`
-because they generally must appear on a separate line. The only exception is that
+because they generally must appear on separate lines. The only exception is that
 a single comment token may be rendered at the end of a line if it also appeared
 that way in the original text (see below).
 
 ```c
 int x = 0; // a single trailing comment is allowed
-int y = 5; /* to render after a statement */
+int y = 5; /* after the end of a line */
 ```
 
 [1]: https://nullprogram.com/

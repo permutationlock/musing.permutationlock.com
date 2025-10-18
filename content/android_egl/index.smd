@@ -280,6 +280,12 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
 static int32_t handle_input(struct android_app *app, AInputEvent *event) {
     /* handle touch and keyboard input events */
 
+    /*
+     * NOTE: returning anything other than 0 indicates that the event
+     *       was handled by our code; e.g. if we return 1 for a volume
+     *       button key event, then we capture the event and the system
+     *       volume will not change!
+     */
     return 0;
 }
 
@@ -594,6 +600,12 @@ static void handle_cmd(struct android_app *app, int32_t cmd) {
 static int32_t handle_input(struct android_app *app, AInputEvent *event) {
     /* handle touch and keyboard input */
 
+    /*
+     * NOTE: returning anything other than 0 indicates that the event
+     *       was handled by our code; e.g. if we return 1 for a volume
+     *       button key event, then we capture the event and the system
+     *       volume will not change!
+     */
     return 0;
 }
 

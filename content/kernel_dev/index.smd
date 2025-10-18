@@ -1,5 +1,5 @@
 ---
-.title = "Building and Debugging the Linux Kernel",
+.title = "Linux Kernel Development",
 .date = @date("2025-09-23T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -8,10 +8,9 @@
 ---
 
 I have been a Linux user space programmer for well over ten years, but only
-recently did I take my first steps into kernel module development.
-In this article I'll go over Linux system emulation
-(`qemu`, `toybox`/`busybox`), the basics of the Linux kernel build system
-(`KBuild`), the structure of a kernel module C project,
+recently dipped my toe into kernel development.
+In this article I'll go over Linux system emulation, the basics of
+the Linux kernel build system, the structure of a kernel module C project,
 the key kernel module utilities (`insmod`, `rmmod`, `modprobe`),
 and debugging code that runs in kernel space with `gdb`.
 
@@ -40,45 +39,128 @@ C compiler and linker, [`lldb`][8] is not an option.
 ## Building the Linux kernel
 
 The Linux kernel uses a `make`-based build system called `Kbuild` and
-a custom `Kconfig` build configuration system. We'll delve a little into
+a custom `Kconfig` configuration system. We'll delve a little into
 how both of these work in the kernel module section, but for now
 we just need to clone the kernel source and use `make` to configure and
 build the kernel.
 
-My `linux_kvm_debug` repository contains a config file with the
-options required for QEMU KVM emulation and GDB kernel debugging. The
-`alldefconfig` command will use the `KCONFIG_ALLCONFIG` file as a base
-and set all other config options to default values based
-the host system (as stated above, I am assuming that our host machine and guest
-VM have the same CPU architecture).
+```bash
+$ mkdir linux_kvm_debug
+$ cd linux_kvm_debug
+$ wget https://github.com/torvalds/linux/archive/refs/tags/v6.17.tar.gz
+$ tar -xvf linux-6.17.tar.gz
+```
+
+We'll use the following base config file with the
+options required for QEMU KVM emulation and GDB kernel debugging.
 
 ```bash
-git clone --depth=1 https://github.com/torvalds/linux.git
-git clone --depth=1 https://github.com/permutationlock/linux_kvm_debug.git
-mkdir linux_kvm_debug_build
-make -C linux O=$PWD/linux_kvm_debug_build \
-    KCONFIG_ALLCONFIG=$PWD/linux_kvm_debug/kvm_debug_guest.config \
-    alldefconfig
-make -C linux O=$PWD/linux_kvm_debug_build -j$(nproc)
+# mini.config
+
+# minimum for QEMU toybox initramfs boot
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_SOURCE=""
+CONFIG_STANDALONE=y
+CONFIG_PREVENT_FIRMWARE_BUILD=y
+CONFIG_SYSCTL=y
+CONFIG_UNIX98_PTYS=y
+CONFIG_SWAP=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_BLK_DEV_WRITE_MOUNTED=y
+
+# networking
+CONFIG_ETHERNET=y
+CONFIG_UNIX=y
+CONFIG_IPV6=y
+CONFIG_FORCEDETH=y
+CONFIG_E1000=y
+CONFIG_E1000E=y
+
+# add ext4 filesystem to mount volumes
+CONFIG_EXT4=y
+
+# enable modules
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+
+# allow kernel GDB debugging
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+CONFIG_GDB_SCRIPTS=y
+CONFIG_FRAME_POINTER=y
+CONFIG_RANDOMIZE_BASE=n # optional, may use `nokaslr` parameter instead
+
+# KVM guest (kvm_guest.config)
+CONFIG_NET=y
+CONFIG_NET_CORE=y
+CONFIG_NETDEVICES=y
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV=y
+CONFIG_NETWORK_FILESYSTEMS=y
+CONFIG_INET=y
+CONFIG_TTY=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_IP_PNP=y
+CONFIG_IP_PNP_DHCP=y
+CONFIG_BINFMT_ELF=y
+CONFIG_PCI=y
+CONFIG_PCI_MSI=y
+CONFIG_DEBUG_KERNEL=y
+CONFIG_VIRTUALIZATION=y
+CONFIG_HYPERVISOR_GUEST=y
+CONFIG_PARAVIRT=y
+CONFIG_KVM_GUEST=y
+CONFIG_S390_GUEST=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VIRTIO_NET=y
+CONFIG_9P_FS=y
+CONFIG_NET_9P=y
+CONFIG_NET_9P_VIRTIO=y
+CONFIG_SCSI_LOWLEVEL=y
+CONFIG_SCSI_VIRTIO=y
+CONFIG_VIRTIO_INPUT=y
+CONFIG_DRM_VIRTIO_GPU=y
+```
+
+The `allnoconfig` command will use the `KCONFIG_ALLCONFIG` file as a base,
+set basic architecture defaults, and disable all other config options.
+
+```bash
+$ mkdir linux-6.17_build
+$ make -C linux-6.17 O=linux-6.17_build \
+>    ARCH=x86_64 \
+>    KCONFIG_ALLCONFIG=mini.config \
+>    allnoconfig
+$ make -C linux-6.17 O=linux-6.17_build -j$(nproc)
 ```
 
 The compiled kernel image will be located in
-`linux_kvm_debug_build/arch/x86/boot/bzImage` (swap
-`x86` for your host archicture).
+`linux-6.17_build/arch/x86/boot/bzImage`. If you are using a different architecture,
+the process should be the same but with `x86`/`x86_64` swapped
+for your host architecture.
 
 ## Creating an initial RAM filesystem
 
 The primary way to boot a Linux system is to use an inital RAM
 filesystem (initramfs). The strategy is to create a directory
 containing an `init` binary to be run as the initial user-space process, as well
-as any other other files and directories required.
+as any other other files and directories required, and package it into a
+[`cpio`][19] archive.
 
 **Note:** An initramfs can be built into the kernel binary itself, or be provided
-separately. We will boot from several different initramfs
-archives with our debug Kernel, so we'll simply specify the initramfs
-each time we boot a virtual machine.
+separately. We will need to boot from several different initramfs
+archives to test our debug Kernel, so we'll specify the initramfs archive
+to use on each boot.
 
-To demonstrate a simple initramfs, we'll create a C init program that prints
+For our first initramfs we'll create a C program that prints
 `"Hello, World!"`. Note that if we use the host C compiler with its default flags,
 then it will compile a binary targeting the C "runtime" for the host system. I.e.
 it will assume that the host lib directories (`/lib`, `/usr/lib`, etc.) are
@@ -89,8 +171,9 @@ option is to use the `nolibc` static C runtime provided by the Linux kernel.
 The kernel build system exposes a `make` command to produce a `nolibc` sysroot.
 
 ```bash
-$ make -C linux/tools/include/nolibc headers_standalone \
-    OUTPUT=linux_kvm_debug_build/
+$ mkdir nolibc
+$ make ARCH=x86_64 OUTPUT=nolibc/ -C linux-6.17/tools/include/nolibc \
+>    headers_standalone
 ```
 
 By default, the Linux kernel will mount the inital RAM filesystem as `/`
@@ -99,7 +182,7 @@ process. We will write a basic `init.c` file and compile a statically linked
 `init` executable.
 
 ```c
-/* linux_kvm_debug/init_c_nolibc/init.c */
+/* init_c_nolibc/init.c */
 
 /* crt.h: exports `_start` symbol to init runtime and call `main` */
 #include <crt.h>
@@ -113,7 +196,7 @@ int main(void) {
     sleep(1);
 
     /* write our message to standard output */
-    const char msg[] = "Hello, World!";
+    const char msg[] = "Hello, World!\n";
     write(STDOUT_FILENO, msg, sizeof(msg));
 
     /* wait for user to press enter by reading from standard input */
@@ -127,19 +210,19 @@ int main(void) {
 
 ```bash
 $ cc -static -fno-stack-protector -nostdlib -nostdinc \
-    -I linux_kvm_debug_build/sysroot/include \
-    -o linux_kvm_debug/init_c_nolibc/init \
-    linux_kvm_debug/init_c_nolibc/init.c
+>    -I nolibc/sysroot/include \
+>    -o init_c_nolibc/init \
+>    init_c_nolibc/init.c
 ```
 
 The `init` static executable will wait one second, write `"Hello, World!"`, and
-then wait for the user to press enter. Next we'll use `cpio` to package the `init_c_nolibc`
-directory into an initramfs.
+then restart the computer after the user presses enter. Next we'll use `cpio`
+to package the `init_c_nolibc` directory into an initramfs `newc` archive.
 
 ```bash
-$ cd linux_kvm/debug/init_c_nolibc
+$ cd init_c_nolibc
 $ find . | cpio -o --format=newc > ../init_c_nolibc.cpio
-$ cd ../..
+$ cd ..
 ```
 
 With a kernel and an inital RAM filesystem containing an init executable, we can boot
@@ -147,9 +230,14 @@ an emulated system using QEMU.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot \
-    -kernel linux_kvm_debug_build/arch/x86/boot/bzImage \
-    -initramfs linux_kvm_debug/init_c_nolibc.cpio \
-    -append "HOST=x86_64 console=ttyS0"
+>    -kernel linux-6.17_build/arch/x86/boot/bzImage \
+>    -initramfs init_c_nolibc.cpio \
+>    -append "HOST=x86_64 console=ttyS0"
+(vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
+(vm) Command line: HOST=x86_64 console=ttyS0
+(vm) # ...
+(vm) Run /init as init process
+(vm) Hello, World!
 ```
 
 You should see a string of kernel boot messages, followed by `Hello, World!`.
@@ -161,38 +249,34 @@ In this section we will attach a `gdb` session to the kernel process
 running in our QEMU virtual machine. Our kernel was
 built with debug information and `gdb` python scripts enabled (see
 `kvm_debug_guest.config`), so all we need to do before we can open
-`gdb` is change a few QEMU flags.
+`gdb` is add a few QEMU flags.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s -S \
-    -kernel linux_kvm_debug_build/arch/x86/boot/bzImage \
-    -initramfs linux_kvm_debug/init_c_nolibc.cpio \
-    -append "HOST=x86_64 console=ttyS0 nokaslr"
+>    -kernel linux-6.17_build/arch/x86/boot/bzImage \
+>    -initramfs init_c_nolibc.cpio \
+>    -append "HOST=x86_64 console=ttyS0"
 ```
 
 The `-s` flag (short for `-gdb tcp::1234`) hosts a `gdb` server at address `:1234`
 attached to the kernel process. The `-S` flag halts the CPU so the
 kernel will not start booting before our `gdb` session can connect to the server.
-Finally, the `nokaslr` kernel parameter turns off Kernal Address Space Layout
-Randomization (KASLR), a security feature that randomizes the memory locations
-where kernel code is loaded.
 
 We can now connect a `gdb` session and begin debugging.
 
 ```bash
-$ cd linux_kvm_debug_build
-$ gdb vmlinux
+$ gdb linux-6.17_build/vmlinux
 (gdb) target remote :1234
 Remote debugging using :1234
 0x000000000000fff0 in ?? ()
 (gdb) hbreak start_kernel
 Note: breakpoint 1 also set at pc 0xffffffff821aca20.
-Hardware assisted breakpoint 2 at 0xffffffff821aca20: file /home/aven/linux/init/main.c, line 899.
+Hardware assisted breakpoint 2 at 0xffffffff821aca20: file /home/aven/linux_kvm_debug/linux-6.17/init/main.c, line 899.
 (gdb) c
 Continuing.
 
 Breakpoint 1, start_kernel ()
-    at /home/aven/linux/init/main.c:899
+    at /home/aven/linux_kvm_debug/linux-6.17/init/main.c:899
 899	{
 (gdb)
 ```
@@ -206,8 +290,8 @@ However, we know that our `init` binary will eventually be run
 and issue a `write` system call. We can search the kernel for
 the function name that will be called for `write`.
 
-```
-$ grep -A4 -rn "SYSCALL_DEFINE.\?(write," linux/
+```bash
+$ grep -A4 -rn "SYSCALL_DEFINE.\?(write," linux-6.17/
 fs/read_write.c:746:SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 fs/read_write.c-747-		size_t, count)
 fs/read_write.c-748-{
@@ -221,13 +305,13 @@ from the `start_kernel` breakpoint we hit above is shown below.
 
 ```bash
 (gdb) hbreak fs/read_write.c:749
-Hardware assisted breakpoint 3 at 0xffffffff814156a4: file /home/aven/linux/fs/read_write.c, line 749.
+Hardware assisted breakpoint 3 at 0xffffffff814156a4: file /home/aven/linux_kvm_debug/linux-6.17/fs/read_write.c, line 749.
 (gdb) c
 Continuing.
 
 Breakpoint 3, __do_sys_write (fd=1, 
     buf=0x7fff7d0114c2 "Hello, World!", count=14)
-    at /home/aven/docs/projects/c/linux/fs/read_write.c:749
+    at /home/aven/linux_kvm_debug/linux-6.17/fs/read_write.c:749
 749		return ksys_write(fd, buf, count);
 (gdb) p buf[0]@count
 $1 = "Hello, World!"
@@ -236,36 +320,40 @@ $1 = "Hello, World!"
 We interrupted the kernel side of the `"Hello, World!"` write system call
 from our `init` process!
 
-## Adding a shell to our initramfs with Toybox/Busybox
+## Adding a shell to our initramfs with `toybox`
 
 Our current initramfs contains a single `init` binary we compiled using
 `nolibc`. While such single binary systems can be useful for testing
 or building bespoke devices, in general we expect Linux systems to provide
 a Unix style shell with a standard set of command line utilities.
 Most GNU+Linux distributions
-use the GNU binary utilites, but these are a somewhat heavy dependency to add
+use the [GNU core utilites][20], but these are a somewhat heavy dependency
 and provide far more than we need for a simple debug system.
 
 There are several Unix-in-a-box projects that provide a single
-"swiss army knife binary" containing all of the command utilites, the most popular
-being [`busybox`][11] and
-[`toybox`][12]. We'll be using `toybox` for our initramfs, but in a later
-section we'll also load a full Alpine Linux sysroot that is based on `busybox`.
+"swiss army knife binary" containing all of the basic command-line utilites,
+the most popular being [`busybox`][11] and
+[`toybox`][12]. We'll be using `toybox` for our initramfs in this section, but later
+we'll build an Alpine Linux system based on `busybox`.
 
 ```bash
+$ git clone --depth=1 https://landley.net/toybox/git
 $ wget https://landley.net/bin/toolchains/latest/x86_64-linux-musl-cross.tar.xz
-$ mkdir linux_kvm_debug/toybox/ccc
-$ tar xvJCf linux_kvm_debug/toybox/ccc x86_64-linux-musl-cross.tar.xz
-$ cp linux_kvm_debug/toybox/.config toybox/
-$ make -C linux_kvm_debug/toybox -j$(nproc)
-$ mkdir -p linux_kvm_debug/init_toybox/home
-$ mkdir -p linux_kvm_debug/init_toybox/bin
-$ cp linux_kvm_debug/toybox/toybox linux_kvm_debug/init_toybox/bin
-$ cd linux_kvm_debug/init_toybox
+$ mkdir toybox/ccc
+$ tar xvJCf toybox/ccc x86_64-linux-musl-cross.tar.xz
+$ cp toybox/.config toybox/
+$ make -C toybox -j$(nproc)
+$ mkdir -p init_toybox/dev
+$ mkdir -p init_toybox/proc
+$ mkdir -p init_toybox/sys
+$ mkdir -p init_toybox/bin
+$ mkdir -p init_toybox/home
+$ cp toybox/toybox init_toybox/bin
+$ cd init_toybox
 $ for i in $(./bin/toybox) do \
-$     ln -s bin/toybox bin/$i \
-$ done
-$ cd ../..
+>     ln -s bin/toybox bin/$i \
+> done
+$ cd ..
 ```
 
 We now have an `init_toybox` sysroot containing a `bin` directory
@@ -286,11 +374,11 @@ is executed with the path to the original text file passed as an argument.
 
 ```bash
 #!/bin/sh
-# linux_kvm_debug/init_toybox/init
+# init_toybox/init
 export HOME=/home PATH=/bin
-mkdir proc && mount -t proc proc proc
-mkdir sys && mount -t sysfs sys sys
-mkdir dev && mount -t devtmpfs dev dev
+mount -t proc proc proc
+mount -t sysfs sys sys
+mount -t devtmpfs dev dev
 ln -sf /proc/self/fd/0 /dev/stdin
 ln -sf /proc/self/fd/1 /dev/stdout
 ln -sf /proc/self/fd/2 /dev/stderr
@@ -298,7 +386,7 @@ mkdir -p dev/shm && chmod +t /dev/shm
 mkdir -p dev/pts && mount -t devpts dev/pts dev/pts
 sleep 1
 echo "Welcome to sh!"
-setsid -c /bin/sh <>/dev/tty0 >&0 2>&1
+setsid -c /bin/sh <>/dev/ttyS0 >&0 2>&1
 reboot -f
 ```
 
@@ -330,34 +418,35 @@ file descriptor `0` and output on descriptors `1` and `2`. In other words,
 it just starts a shell session with the stdin, stdout,
 and stderr file descriptors!
 
-**Note:** `/dev/tty0` probably shouldn't be hard-coded into
+**Note:** We
+specified the initial active `tty` to be `ttyS0` in our QEMU
+parameters, but that probably shouldn't be hard-coded into
 the script. The active `tty` should instead be parsed from
-`/sys/class/tty/console/active`, but in the `init` process of an initramfs
-on a default QEMU virtual machine, the active `tty` will be `tty0`.
+`/sys/class/tty/console/active`, e.g. using `sed` as shown below.
 
 ```bash
-$ chmod +x linux_kvm_debug/init_toybox/init
-$ cd linux_kvm_debug/init_toybox
+setsid -c /bin/sh <>/dev/$(sed '$s@.*[ /]@@' /sys/class/tty/console/active) >&0 2>&1
+```
+
+We may now package the `init_toybox` directory into an initramfs and boot the kernel
+to an `sh` shell.
+
+```bash
+$ chmod +x init_toybox/init
+$ cd init_toybox
 $ find . | cpio -o --format=newc > ../init_toybox.cpio
-$ cd ../..
+$ cd ..
+$ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
+>    -kernel linux-6.17_build/arch/x86/boot/bzImage \
+>    -initramfs init_toybox.cpio \
+>    -append "HOST=x86_64 console=ttyS0"
+(vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
+(vm) Command line: HOST=x86_64 console=ttyS0
+(vm) # ...
+(vm) Run /init as init process
+(vm) Welcome to sh!
+(vm) $ 
 ```
-
-After packaging our new `toybox` based initramfs, we should be able to boot the kernel
-to a shell.
-
-```bash
-$ qemu-system-x86_64 --enable-kvm -nographic -no-reboot \
-    -kernel linux_kvm_debug_build/arch/x86/boot/bzImage \
-    -initramfs linux_kvm_debug/init_toybox.cpio \
-    -append "HOST=x86_64 console=ttyS0"
-# ... Linux boot logs, blah blah blah
-$ Run /init as init process
-$ Welcome to sh!
-$ 
-```
-
-We could also use the steps in the prior section to connect session to the
-`gdb` to the kernel.
 
 ## Building, loading, and debugging kernel modules
 
@@ -366,12 +455,12 @@ modules. In that sense, modules are a loose kernel space equivalent
 to user space shared libraries.
 
 Kernel modules are generally built using the `Kbuild` makefiles from
-the source tree of the Linux kernel version being targeted. In this
+the source tree of the Linux kernel being targeted. In this
 section we'll write a simple `"Hello, Kernel!"` module that prints a
 message to the kernel log ring buffer.
 
 ```c
-/* linux_kvm_debug/hello_mod/hello.c */
+/* hello_mod/hello.c */
 
 #include <linux/module.h>
 #include <linux/printk.h>
@@ -400,19 +489,19 @@ log when it is loaded and unloaded. We can build it with `make` using
 the following Kbuild file.
 
 ```bash
-# linux_kvm_debug/hello_mod/Kbuild
+# hello_mod/Kbuild
 obj-m := hello.o
 ```
 
 ```bash
-$ make -C linux_kvm_debug_build M=$PWD/linux_kvm_debug/hello_mod
+$ make -C linux-6.17_build M=$PWD/hello_mod
 ```
 
 Now we should have a `hello.ko` module object in the source directory.
 
 ```bash
-$ modinfo linux_kvm_debug/hello_mod/hello.ko
-filename:       /home/aven/docs/projects/c/linux_kvm_debug/hello_mod/hello.ko
+$ modinfo hello_mod/hello.ko
+filename:       /home/aven/linux_kvm_debug/hello_mod/hello.ko
 version:        0.1
 description:    A kernel space hello world
 author:         Aven Bross <email@example.com>
@@ -421,27 +510,251 @@ srcversion:     9EDF825B194B21C977AA1B9
 depends:        
 name:           hello
 retpoline:      Y
-vermagic:       6.16.1-0-generic preempt
+vermagic:       6.17.0 mod_unload
 ```
+
 A simple way to have the module available on our
-virtual machine is to package it into the initramfs.
+virtual machine is to package it directly into the initramfs.
 
 ```bash
-$ cp linux_kvm_debug/hello_mod/hello.ko linux_kvm_debug/init_toybox/home/
-$ cd linux_kvm_debug/init_toybox
-$ find . | cpio -o --format=newc > ../init_toybox.cpio
-$ cd ../..
+$ cp hello_mod/hello.ko init_toybox/home/
+$ cd init_toybox
+$ find . | cpio -o --format=newc > ../init_toybox_hello.cpio
+$ cd ..
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
-    -kernel linux_kvm_debug_build/arch/x86/boot/bzImage \
-    -initramfs linux_kvm_debug/init_toybox.cpio \
-    -append "HOST=x86_64 console=ttyS0 nokaslr"
-# ...
-$ Run /init as init process
-$ Welcome to sh!
-$ insmod home/hello.ko
-$ dmesg | grep 
-$ rmmod hello
+>    -kernel linux-6.17_build/arch/x86/boot/bzImage \
+>    -initramfs init_toybox_hello.cpio \
+>    -append "HOST=x86_64 console=ttyS0"
+(vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
+(vm) Command line: HOST=x86_64 console=ttyS0
+(vm) # ...
+(vm) Run /init as init process
+(vm) Welcome to sh!
+(vm) $ insmod home/hello.ko
+(vm) hello: loading out-of-tree module taints kernel.
+(vm) Hello, Kernel!
+(vm) $ lsmod
+(vm) Module                  Size  Used by
+(vm) hello                  12288  0
+(vm) $ rmmod hello
+(vm) Bye, Kernel :(
+(vm) $ lsmod
+(vm) Module                  Size  Used by
+(vm) $ dmesg
+(vm) [    0.000000] Linux version 6.17.0 <VERSION SPECIFIC STUFF>
+(vm) [    0.000000] Command line: HOST=x86_64 console=ttyS0
+(vm) # ...
+(vm) [    0.183990] Run /init as init process
+(vm) [    0.184379] with arguments:
+(vm) [    0.184381] /init
+(vm) [    0.184382] with environment:
+(vm) [    0.184383] HOME=/
+(vm) [    0.184384] TERM=linux
+(vm) [    0.184384] HOST=x86_64
+(vm) [    7.758562] hello: loading out-of-tree module taints kernel.
+(vm) [    7.760936] Hello, Kernel!
+(vm) [   65.639464] Bye, Kernel :(
 ```
+
+If we want to be able to run `make` in the `hello_mod` directory
+to build the module, then we can add a stub `Makefile` as follows.
+
+```bash
+# hello_mod/Makefile
+
+ARCH ?= x86_64
+KDIR ?= ../linux-6.17_build
+PWD := $(CURDIR)
+
+all:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(PWD)
+clean:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(PWD) clean
+```
+
+## Debugging a full Linux distribution
+
+A basic `toybox` system will not always be a satisfactory test
+environment. For example, we may need to test how a variety of
+user space tools interact with our Kernel code, or otherwise
+investigate how kernel code integrates into a fully fledged
+Linux operating system.
+In this section we'll go over how to install a Linux distribution on a
+virtual drive using QEMU, and then how to build, install, and debug
+a custom Linux kernel and/or kernel modules within the virtual machine.
+
+We'll be using Alpine Linux because it is a small and simple
+distroy based on [musl libc][26] and the [`busybox`][11] swiss-army-knife.
+The same basic process should work for any distribution, but the
+package manager, init system, and bootloader may differ.
+
+```bash
+$ mkdir vm_alpine
+$ cd vm_alpine
+$ wget https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-virt-3.22.2-x86_64.iso
+$ dd if=/dev/zero of=hda.img bs=1024M count=20
+$ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
+>     -drive file=hda.img,format=raw \
+>     -cdrom alpine-virt-3.22.2-x86_64.iso \
+>     -boot d
+```
+
+First, we pull a virtual machine `.iso` image for Alpine linux. Then we create a
+`20GB` disk image that will store the disk partitions for our virtual machine. We'll
+need at least 10GB of disk space to fit our Alpine install and still have room to build
+the Linux kernel.
+
+Then we boot a QEMU virtual machine from the Alpine `.iso` image.
+The `-m` argument specifies the memory to allocate to the VM and `-smp`
+species the number of processor cores. The `-drive` argument specifies
+our new `hda.img` image to be the first hard disk provided to the VM. The
+`-cdrom` argument specifies the Alpine `.iso` file to be provided as a CDROM
+device. The `-boot d` argument tells the VM to boot from the CD drive.
+
+You may optionally add `-nographic` and
+`-display curses` to tell QEMU to use [`ncurses`][21] to display the VM within the termial
+emulator instead of a separate graphical window.
+
+Once the machine boots, we should be presented with a `login:` prompt. We may enter `root`
+and press enter to move to the install shell environment. Enter `alpine-setup` and accept the
+default option for every prompt. When selecting disk drives, specify `/dev/sda` as a `sys`
+drive; this will create the standard `boot`, `swap`, and `root` partitions. After completing
+the installation, we can run `poweroff` to shut down the VM. If everything worked as intended,
+we should now be able to boot a virtual machine from the `hda.img` disk file alone.
+
+```bash
+$ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
+>     -drive file=hda.img,format=raw
+```
+
+We can now log in as `root` with the password we set up during installation.
+
+Exiting back to our host system, we can also use our `hda.img` disk as a
+[loop device][22] to mount the VM filesystem within our host filesystem.
+
+```bash
+$ losetup /dev/loop0 -P hda.img
+$ mkdir -p mnt
+$ mount /dev/loop0p3 mnt
+$ mount /dev/loop0p1 mnt/boot
+```
+
+With the filesystem mounted, we can [`chroot`][23] in and use the guest system without
+the indirection of a virtual machine. This allows us to use all CPU cores and memory
+available without the indirection of a VM, e.g. to compile the Linux kernel.
+
+```bash
+# chroot.sh
+
+# setup `/dev`, `/proc`, and `/sys` in `mnt`
+mknod -m 666 mnt/dev/full c 1 7 && chmod 666 mnt/dev/full
+mknod -m 666 mnt/dev/ptmx c 5 2 && chmod 666 mnt/dev/ptmx
+mknod -m 644 mnt/dev/random c 1 8 && chmod 644 mnt/dev/random
+mknod -m 644 mnt/dev/urandom c 1 9 && chmod 644 mnt/dev/urandom
+mknod -m 666 mnt/dev/zero c 1 5 && chmod 666 mnt/dev/zero
+mknod -m 666 mnt/dev/tty c 5 0 && chmod 666 mnt/dev/tty
+mount -t proc none mnt/proc
+mount -o bind /sys mnt/sys
+
+# `chroot` into an `ash` shell rooted in `mnt`
+chroot mnt /bin/ash -l
+
+# clean up `/dev`, `/proc`, and `/sys` in `mnt`
+umount mnt/proc
+umount mnt/sys
+rm -f mnt/dev/*
+
+# flush changes to filesystem
+sync
+```
+
+From within our Alpine Linux `chroot` shell we can install the packages required
+to build a custom Linux kernel, then pull and build a debug kernel.
+
+```bash
+(chroot) $ apk add build-base kernel-virt-dev diffutils
+(chroot) $ cd /root
+(chroot) $ wget https://github.com/torvalds/linux/archive/refs/tags/v6.17.tar.gz
+(chroot) $ tar -xvf linux-6.17.tar.gz
+(chroot) $ mkdir linux-6.17_build
+(chroot) $ cp config-$(uname -r) linux-6.17_build/.config
+(chroot) $ echo "
+         > CONFIG_DEBUG_INFO=y
+         > CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+         > CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+         > CONFIG_GDB_SCRIPTS=y
+         > CONFIG_FRAME_POINTER=y
+         > CONFIG_RANDOMIZE_BASE=n
+         > " >> linux-6.17_build/.config
+(chroot) $ make -C linux-6.17 O=linux-6.17_build olddefconfig
+(chroot) $ make -C linux-6.17 O=linux-6.17_build -j $(nproc)
+(chroot) $ make -C linux-6.17 O=linux-6.17_build modules -j $(nproc)
+```
+
+We can then install our custom kernel and build an associated initramfs.
+
+```bash
+(chroot) $ make -C linux-6.17 O=linux-6.17_build modules_install
+(chroot) $ cp linux-6.17_build/arch/x86/boot/bzImage /boot/vmlinuz-6.17.0
+(chroot) $ cp linux-6.17_build/.config /boot/config-6.17.0
+(chroot) $ mkinitfs -o /boot/initramfs-6.17.0 -b / 6.17.0
+```
+
+Finally, we can modify our bootloader configuration to
+add a default entry to boot from our new kernel and initrafms. The default
+bootloader for Alpine is [syslinux][24]. Below we use
+the `update-extlinux` utility, but the `/boot/extlinux.conf` file
+is fairly simple and may edited manually.
+
+```bash
+(chroot) $ echo "
+         > default=1
+         > " >> /etc/update-extlinux.conf
+(chroot) $ update-extlinux
+```
+
+Next we can exit our `chroot` in order to boot the kernel in a VM.
+Prior to this, however, we'll install `gdb` inside the VM filesystem.
+
+```bash
+(chroot) $ apk add gdb
+(chroot) $ exit
+```
+
+Now we can try booting the VM and debugging our newly installed kernel.
+
+```bash
+$ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 -s -S \
+>     -snapshot -drive file=hda.img,format=raw  &
+```
+
+The `-snapshot` argument will write filesystem changes to temporary files rather than
+the system image. This is useful to avoid corruption while we use the
+mounted filesystem in our chroot at the same time the VM is running.
+
+```bash
+$ ./chroot.sh
+(chroot) $ cd /root
+(chroot) $ gdb linux-6.17_build/vmlinux
+         (gdb) target remote :1234
+         Remote debugging using :1234
+         0x000000000000fff0 in ?? ()
+         (gdb) hbreak start_kernel
+         Hardware assisted breakpoint 1 at 0xffffffff82a01280: file /root/linux-6.17/init/main.c, line 898.
+         (gdb) c
+         Continuing.
+
+         Breakpoint 1, start_kernel () at /root/linux-6.17/init/main.c:898
+         898	{
+         (gdb)  
+```
+
+We now have a simple process to develop a Linux kernel and/or out-of-tree
+kernel modules in the VM filesystem mounted on our host system, and debug
+the kernel space code by attaching `gdb` to a QEMU VM.
+
+Note that we also have `gdb` available within the VM itself, so it is possible
+to simultaneously debug userspace code that is interacting with the kernel.
 
 [1]: https://www.qemu.org/
 [2]: https://en.wikipedia.org/wiki/Kernel-based_Virtual_Machine
@@ -461,3 +774,11 @@ $ rmmod hello
 [16]: https://www.kernel.org/doc/html/latest/filesystems/devpts.html
 [17]: https://www.man7.org/linux/man-pages/man7/shm_overview.7.html
 [18]: https://en.wikipedia.org/wiki/Shebang_%28Unix%29
+[19]: https://en.wikipedia.org/wiki/Cpio
+[20]: https://www.gnu.org/software/coreutils/
+[21]: https://www.man7.org/linux/man-pages/man3/ncurses.3x.html
+[22]: https://www.man7.org/linux/man-pages/man4/loop.4.html
+[23]: https://www.man7.org/linux/man-pages/man2/chroot.2.html
+[24]: https://wiki.alpinelinux.org/wiki/Bootloaders#Syslinux
+[25]: https://example.com
+[26]: https://musl.libc.org/
