@@ -697,17 +697,16 @@ $ ./chroot.sh
          > CONFIG_GDB_SCRIPTS=y
          > CONFIG_FRAME_POINTER=y
          > CONFIG_RANDOMIZE_BASE=n
-         > CONFIG_MODULE_SIG_KEY=""
+         > CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
          > " >> linux-6.17_build/.config
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build olddefconfig
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build -j $(nproc)
-(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build modules -j $(nproc)
 ```
 
 We can then install our custom kernel and build an associated initramfs.
 
 ```bash
-(chroot) $ make -C linux-6.17 O=linux-6.17_build modules_install
+(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build modules_install
 (chroot) $ cp linux-6.17_build/arch/x86/boot/bzImage /boot/vmlinuz-6.17.0
 (chroot) $ cp linux-6.17_build/.config /boot/config-6.17.0
 (chroot) $ mkinitfs -o /boot/initramfs-6.17.0 -b / 6.17.0
