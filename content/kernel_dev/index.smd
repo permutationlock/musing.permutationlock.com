@@ -697,7 +697,7 @@ $ ./chroot.sh
          > CONFIG_GDB_SCRIPTS=y
          > CONFIG_FRAME_POINTER=y
          > CONFIG_RANDOMIZE_BASE=n
-         > CONFIG_
+         > CONFIG_MODULE_SIG_KEY=""
          > " >> linux-6.17_build/.config
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build olddefconfig
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build -j $(nproc)
