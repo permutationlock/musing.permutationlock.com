@@ -23,15 +23,15 @@ the package manager. To install the development version of a
 library (i.e. to install header files and [`pkg-config`][36] files in addition
 to the library itself), the development package will often be required.
 
-For system emulation you will need [`qemu`][1] and the
-specific `qemu-system-xxx` for the architecture you wish to emulate.
+For system emulation we will need the
+`qemu-system-xxx` emulator for our target architecture .
 To take advantage
 of [KVM][2] (and avoid having to set up a cross-compilation toolchain),
-the emulated system architecture should match your
-physical hardware; e.g. if your host system is running on an
-`x86_64` CPU, then you should install and use `qemu-system-x86_64`.
+the emulated system architecture should match our
+physical hardware; e.g. if our host system is running on an
+`x86_64` CPU, then we should install and use `qemu-system-x86_64`.
 
-Finally, to debug kernel space code you will need the GNU debugger ([`gdb`][7]).
+Finally, to debug kernel space code, we will need the GNU debugger ([`gdb`][7]).
 
 ## Building the Linux kernel
 
@@ -170,8 +170,8 @@ build sysroot.
 
 ```bash
 $ mkdir nolibc
-$ make ARCH=x86_64 OUTPUT=nolibc/ -C linux-6.17/tools/include/nolibc \
->    headers_standalone
+$ make -C linux-6.17/tools/include/nolibc \
+>    ARCH=x86_64 OUTPUT=nolibc/ headers_standalone
 ```
 
 By default, the Linux kernel will mount the inital RAM filesystem as `/`
@@ -180,7 +180,7 @@ process. We will write a basic `init.c` file and compile a statically linked
 `init` executable.
 
 ```c
-/* init_c_nolibc/init.c */
+/* init_c/init.c */
 
 /* crt.h: exports `_start` symbol to init runtime and call `main` */
 #include <crt.h>
@@ -207,19 +207,19 @@ int main(void) {
 ```
 
 ```bash
-$ cc -static -fno-stack-protector -nostdlib -nostdinc \
+$ gcc -static -fno-stack-protector -nostdlib -nostdinc \
 >    -I nolibc/sysroot/include \
->    -o init_c_nolibc/init \
->    init_c_nolibc/init.c
+>    -o init_c/init \
+>    init_c/init.c
 ```
 
 The `init` static executable will wait one second, write `"Hello, World!"`, and
 then restart the computer after the user presses enter. Next we'll use `cpio`
-to package the `init_c_nolibc` directory into an initramfs `newc` archive.
+to package the `init_c` directory into an initramfs `newc` archive.
 
 ```bash
-$ cd init_c_nolibc
-$ find . | cpio -o --format=newc > ../init_c_nolibc.cpio
+$ cd init_c
+$ find . | cpio -o --format=newc > ../init_c.cpio
 $ cd ..
 ```
 
@@ -229,7 +229,7 @@ an emulated system using `qemu`.
 ```bash
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot \
 >    -kernel linux-6.17_build/arch/x86/boot/bzImage \
->    -initramfs init_c_nolibc.cpio \
+>    -initrd init_c.cpio \
 >    -append "HOST=x86_64 console=ttyS0"
 (vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
 (vm) Command line: HOST=x86_64 console=ttyS0
@@ -252,7 +252,7 @@ built with debug information and `gdb` python scripts enabled (see
 ```bash
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s -S \
 >    -kernel linux-6.17_build/arch/x86/boot/bzImage \
->    -initramfs init_c_nolibc.cpio \
+>    -initrd init_c.cpio \
 >    -append "HOST=x86_64 console=ttyS0"
 ```
 
@@ -269,14 +269,13 @@ Reading symbols from /home/aven/linux_kvm_debug/linux-6.17_build/vmlinux...
 Remote debugging using :1234
 0x000000000000fff0 in ?? ()
 (gdb) hbreak start_kernel
-Note: breakpoint 1 also set at pc 0xffffffff821aca20.
-Hardware assisted breakpoint 2 at 0xffffffff821aca20: file /home/aven/linux_kvm_debug/linux-6.17/init/main.c, line 899.
+Hardware assisted breakpoint 1 at 0xffffffff81a6d630: file /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/init/main.c, line 899.
 (gdb) c
 Continuing.
 
 Breakpoint 1, start_kernel ()
-    at /home/aven/linux_kvm_debug/linux-6.17/init/main.c:899
-899 {
+    at /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/init/main.c:899
+899		char *command_line;
 (gdb)
 ```
 
@@ -308,12 +307,10 @@ Hardware assisted breakpoint 3 at 0xffffffff814156a4: file /home/aven/linux_kvm_
 (gdb) c
 Continuing.
 
-Breakpoint 3, __do_sys_write (fd=1, 
-    buf=0x7fff7d0114c2 "Hello, World!", count=14)
-    at /home/aven/linux_kvm_debug/linux-6.17/fs/read_write.c:749
-749     return ksys_write(fd, buf, count);
-(gdb) p buf[0]@count
-$1 = "Hello, World!"
+Breakpoint 2, __do_sys_write (fd=1, buf=0x7ffde9ee7c51 "Hello, World!\n", count=15)
+    at /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/fs/read_write.c:749
+749		return ksys_write(fd, buf, count);
+(gdb)
 ```
 
 We interrupted the kernel side of the `"Hello, World!"` write system call
@@ -336,24 +333,24 @@ the most popular being [`busybox`][11] and
 we'll build an Alpine Linux system based on `busybox`.
 
 ```bash
-$ git clone --depth=1 https://landley.net/toybox/git
-$ wget https://landley.net/bin/toolchains/latest/x86_64-linux-musl-cross.tar.xz
+$ wget https://landley.net/toybox/downloads/binaries/latest/toybox-x86_64
+$ chmod +x toybox-x86_64
 $ mkdir toybox/ccc
-$ tar xvJCf toybox/ccc x86_64-linux-musl-cross.tar.xz
-$ cp toybox/.config toybox/
-$ make -C toybox -j$(nproc)
 $ mkdir -p init_toybox/dev
 $ mkdir -p init_toybox/proc
 $ mkdir -p init_toybox/sys
 $ mkdir -p init_toybox/bin
 $ mkdir -p init_toybox/home
-$ cp toybox/toybox init_toybox/bin
-$ cd init_toybox
-$ for i in $(./bin/toybox) do \
->     ln -s bin/toybox bin/$i \
-> done
-$ cd ..
+$ mv toybox-x86_64 init_toybox/bin/toybox
+$ cd init_toybox/bin
+$ for i in $(./toybox); do ln -s toybox $i; done
+$ cd ../..
 ```
+
+**Note:** If you are uncomfortable downloading the `toybox` binary,
+you may also build it from source. You will need to use a C toolchain
+capable of building static `x86_64` binaries, e.g. a `gcc` or `clang`
+toolchain based on [`musl` libc][36].
 
 We now have an `init_toybox` sysroot containing a `bin` directory
 with a symlink file for each of the `toybox` commands. The `toybox`
@@ -437,7 +434,7 @@ $ find . | cpio -o --format=newc > ../init_toybox.cpio
 $ cd ..
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 >    -kernel linux-6.17_build/arch/x86/boot/bzImage \
->    -initramfs init_toybox.cpio \
+>    -initrd init_toybox.cpio \
 >    -append "HOST=x86_64 console=ttyS0"
 (vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
 (vm) Command line: HOST=x86_64 console=ttyS0
@@ -471,7 +468,6 @@ static int __init hello_init(void) {
 
 static void __exit hello_exit(void) {
     pr_info("Bye, Kernel :(\n");
-    return 0;
 }
 
 module_init(hello_init);
@@ -500,15 +496,14 @@ Now we should have a `hello.ko` module object in the source directory.
 
 ```bash
 $ modinfo hello_mod/hello.ko
-filename:       /home/aven/linux_kvm_debug/hello_mod/hello.ko
+filename:       /home/aven/docs/projects/vms/kvm_dbg/hello_mod/hello.ko
 version:        0.1
 description:    A kernel space hello world
 author:         Aven Bross <email@example.com>
 license:        GPL
-srcversion:     9EDF825B194B21C977AA1B9
+srcversion:     42A234CAB9C4A0A5982807E
 depends:        
 name:           hello
-retpoline:      Y
 vermagic:       6.17.0 mod_unload
 ```
 
@@ -522,7 +517,7 @@ $ find . | cpio -o --format=newc > ../init_toybox_hello.cpio
 $ cd ..
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 >    -kernel linux-6.17_build/arch/x86/boot/bzImage \
->    -initramfs init_toybox_hello.cpio \
+>    -initrd init_toybox_hello.cpio \
 >    -append "HOST=x86_64 console=ttyS0"
 (vm) Linux version 6.17.0 <SYSTEM SPECIFIC STUFF>
 (vm) Command line: HOST=x86_64 console=ttyS0
@@ -591,7 +586,7 @@ package manager, init system, and bootloader may differ.
 $ mkdir vm_alpine
 $ cd vm_alpine
 $ wget https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-virt-3.22.2-x86_64.iso
-$ qemu-img create -f raw hda.img 20G
+$ truncate -s 12G hda.img
 $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
 >     -drive file=hda.img,format=raw \
 >     -cdrom alpine-virt-3.22.2-x86_64.iso \
@@ -599,9 +594,9 @@ $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
 ```
 
 First, we pull a virtual machine `.iso` image for Alpine linux. Then we create a
-`20GB` disk image that will store the disk partitions for our virtual machine. We'll
+`12GB` disk image that will store the disk partitions for our virtual machine. We'll
 need at least 10GB of disk space to fit our Alpine install and still have room to build
-the Linux kernel.
+and install a custom Linux kernel.
 
 Then we boot a `qemu` virtual machine from the Alpine `.iso` image.
 The `-m` argument specifies the memory to allocate to the VM and `-smp`
@@ -615,11 +610,18 @@ You may optionally add `-nographic` and
 emulator instead of a separate graphical window.
 
 Once the machine boots, we should be presented with a `login:` prompt. We may enter `root`
-and press enter to move to the install shell environment. Enter `alpine-setup` and accept the
-default option for every prompt. When selecting disk drives, specify `/dev/sda` as a `sys`
-drive; this will create the standard `boot`, `swap`, and `root` partitions. After completing
+and press enter to move to the install shell environment.
+
+Next we'll execute `setup-alpine` and accept the
+default option for every prompt except for time zone, user, and disk drive.
+We'll use our local time zone, enter `no` when asked to setup a user, and
+at the disk prompt set `sda` as a `sys`
+drive. This will create the standard `boot`, `swap`, and `root` partitions
+on our `hda.img` drive and format them accordingly.
+
+After completing
 the installation, we can run `poweroff` to shut down the VM. If everything worked as intended,
-we should now be able to boot a virtual machine from the `hda.img` disk file alone.
+we should be able to boot a virtual machine directly from the `hda.img` disk.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
@@ -653,8 +655,15 @@ mknod -m 666 $PWD/mnt/dev/tty c 5 0 && chmod 666 $PWD/mnt/dev/tty
 mount -t proc none $PWD/mnt/proc
 mount -o bind /sys $PWD/mnt/sys
 
+# replace VM's name resolution conf with host's
+cp $PWD/mnt/etc/resolv.conf resolv.conf
+cp /etc/resolv.conf $PWD/mnt/etc/resolv.conf
+
 # `chroot` into an `ash` shell rooted in `mnt`
 chroot $PWD/mnt /bin/ash -l
+
+# restore VM's name resolution conf
+mv resolv.conf $PWD/mnt/etc/resolv.conf
 
 # clean up `/dev`, `/proc`, and `/sys` in `mnt`
 umount $PWD/mnt/proc
@@ -675,12 +684,12 @@ to build a custom Linux kernel, then pull and build a debug kernel.
 
 ```bash
 $ ./chroot.sh
-(chroot) $ apk add build-base kernel-virt-dev diffutils
+(chroot) $ apk add build-base linux-headers linux-virt-dev diffutils openssl-dev
 (chroot) $ cd /root
 (chroot) $ wget https://github.com/torvalds/linux/archive/refs/tags/v6.17.tar.gz
 (chroot) $ tar -xvf linux-6.17.tar.gz
 (chroot) $ mkdir linux-6.17_build
-(chroot) $ cp config-$(uname -r) linux-6.17_build/.config
+(chroot) $ cp /boot/config-* linux-6.17_build/.config
 (chroot) $ echo "
          > CONFIG_DEBUG_INFO=y
          > CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
@@ -688,10 +697,11 @@ $ ./chroot.sh
          > CONFIG_GDB_SCRIPTS=y
          > CONFIG_FRAME_POINTER=y
          > CONFIG_RANDOMIZE_BASE=n
+         > CONFIG_
          > " >> linux-6.17_build/.config
-(chroot) $ make -C linux-6.17 O=linux-6.17_build olddefconfig
-(chroot) $ make -C linux-6.17 O=linux-6.17_build -j $(nproc)
-(chroot) $ make -C linux-6.17 O=linux-6.17_build modules -j $(nproc)
+(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build olddefconfig
+(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build -j $(nproc)
+(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build modules -j $(nproc)
 ```
 
 We can then install our custom kernel and build an associated initramfs.
@@ -728,7 +738,7 @@ Prior to this, however, we'll install `gdb` inside the VM filesystem.
 
 The `gdbinit` file tells `gdb` to allow loading python scripts from any
 subdirectory under `/`. If you find this too unsafe, you can instead add
-the specific path to our kernel build `/root/linux-6.17_build/`.
+only the path to our kernel build `/root/linux-6.17_build/`.
 
 Now we can try booting the VM and debugging our newly installed kernel.
 
@@ -740,7 +750,7 @@ $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 -s -S \
 The `-snapshot` argument will write filesystem changes to temporary files rather than
 the system image. This is useful to avoid corruption while we use the
 mounted filesystem in a chroot at the same time the VM is running. It is similarly
-important not to modify the filesystem from our `chroot` while the VM is running.
+important to never modify the filesystem from our `chroot` while the VM is running.
 Thus we'll make a second `chroot` script that mounts the VM
 filesystem as read-only and jumps directly into `gdb`.
 
@@ -765,6 +775,7 @@ Running this `gdb.sh` script should present us with a `gdb` session in a
 read-only copy of our Alpine sysroot.
 
 ```bash
+$ chmod +x gdb.sh
 $ ./gdb.sh
 (gdb) file /root/linux-6.17_build/vmlinux
 Reading symbols from /root/linux-6.17_build/vmlinux...
@@ -879,21 +890,27 @@ Breakpoint 1, zfsdev_ioctl (filp=0xffff88800739a900, cmd=23044, arg=140736606537
 (gdb) 
 ```
 
+In order to fully test the `zfs` we could create further raw disk image
+files and provide them to `qemu` as drives.
+
 ## Further reading
 
+The root source of information on debugging the Linux is
+the [kernel documentation][37].
+
 For more information on Linux kernel module development, the
-[Linux Kernel Module Programming Guide][29] is fantastic. Before discovering
-and reading that guide, I learned a lot from tinkering with this nice
+[Linux Kernel Module Programming Guide][29] is fantastic. I also
+learned a lot from tinkering with this nice
 [`ioctl` driver example][30].
 
 The [`toybox`][12] project includes its own ['mkroot'][31] system to
 automatically build a complete initramfs from scratch. A lot of my
-knowledge of initramfs comes from studying the output of `mkroot`.
+knowledge of initramfs comes from studying `mkroot`.
 
-Above we used simple raw images for all our virutal drives, but `qemu` also
-provides the [`qcow2`][32] (Qemu Copy On Write 2) virtual drive format. Such drives
-cannot be mounted as simple `/dev/loopX` devices, but we may use [`qemu-nbd`][33]
-to mount them as `/dev/nbdX` [network block devices][34].
+Above we used simple raw images for our virutal drives, but `qemu` also
+supports the [`qcow2`][32] (Qemu Copy On Write 2) format. Such drives
+cannot be mounted as simple `/dev/loopX` devices, but can be
+mounted as `/dev/nbdX` [network block devices][34] via [`qemu-nbd`][33].
 
 [1]: https://www.qemu.org/
 [2]: https://en.wikipedia.org/wiki/Kernel-based_Virtual_Machine
@@ -930,3 +947,5 @@ to mount them as `/dev/nbdX` [network block devices][34].
 [33]: https://www.qemu.org/docs/master/tools/qemu-nbd.html
 [34]: https://docs.kernel.org/admin-guide/blockdev/nbd.html
 [35]: https://www.kernel.org/doc/html/latest/process/changes.html
+[36]: https://musl.libc.org/
+[37]: https://www.kernel.org/doc/html/latest/process/debugging/gdb-kernel-debugging.html
