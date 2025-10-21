@@ -1,6 +1,6 @@
 ---
 .title = "Parsing and Rendering C",
-.date = @date("2025-09-11T00:00:00"),
+.date = @date("2025-10-12T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
 .draft = false,
