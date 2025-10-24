@@ -10,7 +10,7 @@
 ---
 
 This article covers my
-experience writing [`aven-cfmt`][8], a tiny, fast, zero-dependency
+experience writing [`aven-cfmt`][8], a simple zero-dependency
 C parser and renderer.
 
 ## Motivation
@@ -72,7 +72,7 @@ int arr[] = {
 ```
 
 But `clang-format` breaks this consistency when it comes to expressions
-and other parenthesised statements. For example, it refuses to break a
+and other parenthesized statements. For example, it refuses to break a
 conditional expression of an `if` statement to match the style above.
 
 ```c
@@ -117,10 +117,10 @@ evaluated at all prior lines.
 As I see it, every C parser has two choices:
 
  1. take the include paths as input and parse using the preprocessor and full semantic analysis;
- 2. assume "reasonable" preprocessor use and hueristically parse a subset of C.
+ 2. assume "reasonable" preprocessor use and heuristically parse a subset of C.
 
-Almost all source code formatters that I'm aware of choose the second option.
-The first reason for this is that hueristics are quite accurate
+All source code formatters that I'm aware of choose the second option.
+The first reason for this is that heuristics are quite accurate
 for most source code that is practically encountered. But, in my eyes,
 the most compelling reason to avoid the first option is usability.
 If the formatter requires full knowledge of include paths and
@@ -148,18 +148,18 @@ Macro `#define A` and `#define A(...)` directives are each be parsed into a
 separate AST. Each macro AST will then be rendered when the corresponding
 portion of the primary AST is rendered.
 
-A macro definiton may be followed by a single token, a type name, an
+A macro definition may be followed by a single token, a type name, an
 initializer list, a list of declaration specifiers, or an expression statement,
-a `do` statement, or a declaration, all ommitting the terminating `;`.
+a `do` statement, or a declaration, all omitting the terminating `;`.
 The special `#` and `##` operators are also allowed in preprocessor code.
 
 #### Macro invocations
 
-A macro invocation is an identifier followed by an optional parenthesised parameter
+A macro invocation is an identifier followed by an optional parenthesized parameter
 list of assignment expressions and type names. Macro invocations may appear in
 type names, declaration specifiers, and compound string literals. In addition, a
 postfix parenthesis expression is allowed to contain type names in its parameter
-list to allow type parameterised macro invocations within expressions.
+list to allow type parameterized macro invocations within expressions.
 
 #### Conditional directives
 
@@ -196,6 +196,9 @@ and allocate memory from arenas ([*Enter the Arena*][9]).
 I make frequent use of the following macros.
 
 ```c
+#define or ||
+#define and &&
+
 // my countof is variadic to accommodate e.g. countof((T[]){ t1, t2, t3 })
 // whether this was a good idea remains to be determined
 #define countof(...) ((sizeof(__VA_ARGS__)) / (sizeof(*(__VA_ARGS__)))
@@ -605,9 +608,9 @@ from an interior index without any context.
 ### Improving state machine performance with `goto`
 
 Recently I changed the tokenizer to use `goto` to directly jump between
-states, rather than modifying the `ctx->state` member and runnning
+states, rather than modifying the `ctx->state` member and running
 `aven_c_lex_step` in a loop. The major benefit of this method is
-that the destination of each jump instrcution is hardcoded, rather than determined
+that the destination of each jump instruction is hardcoded, rather than determined
 by the runtime variable `ctx->state`. Modern processors are fairly
 good at predicting jumps like this, but I noticed that the Zig tokenizer
 used direct state jumps and decided to
@@ -1133,7 +1136,7 @@ However, some node types will use `lhs` and/or `rhs`
 to index to a slice of `uint32_t`s in the `data` list. Such slices
 are initially constructed in the `scratch` list by calling `aven_c_ast_scratch_init`
 and then pushing each element to `scratch` with `list_push`. The
-slice is then "committed" fromt the scratch list to the data list with
+slice is then "committed" from the scratch list to the data list with
 `aven_c_ast_scratch_commit`.
 
 Additionally, some node types are constructed from more than one significant token
@@ -2555,7 +2558,7 @@ require a line break, then the current "line break state" `split` is checked. If
 then the line buffer is reset and failure is returned. If `split` is `true`,
 then we try to render the subtree again, this time with `split` set to `true`
 for the subtree to allow the
-line buffer to be flushed and text split accross lines.
+line buffer to be flushed and text split across lines.
 
 ```c
 static bool aven_c_ast_render_node(
@@ -3027,14 +3030,14 @@ static bool aven_c_ast_render_node(
 
 Each of the `_try` macros above first try to render without breaking the current line, then
 either reset the state and return false (if `split` is `false`) or attempt to render
-allowing line breaks and fail permantly if that doesn't work (if `split` is `true`).
+allowing line breaks and fail permanently if that doesn't work (if `split` is `true`).
 The `_surround` macros each
 render the given node/data surrounded by the given open and close tokens, breaking and indenting
 accordingly.
 
 The `_force` macro renders a token regardless of column fit in order to allow
 terminating `;` or bracket characters to not break rendering logic. This allows lines to
-go one or two characters beyond the column limit, but this occurs rarely in practtice.
+go one or two characters beyond the column limit, but this occurs rarely in practice.
 
 The relevant code is provided below, but be warned that it is fairly ugly. Maybe I'll
 re-write the renderer one day, but it is fast and functional so it's hard to

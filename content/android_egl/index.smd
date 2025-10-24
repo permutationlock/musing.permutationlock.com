@@ -27,7 +27,7 @@ In this article we'll walk through the steps required to acquire the SDK
 build tools, write a minimal OpenGL app in C, and package a `.apk` file
 to install on an Android device.
 
-## Build environment
+## Requirements
 
 I will assume that we are working in a shell on a
 Unix/POSIX-like operating system (e.g. `bash` on Linux). The
@@ -993,7 +993,7 @@ Now the current color state should be saved when the
 the app is hidden or closed, and loaded when
 the app becomes visible or is re-opened.
 
-**Note:** For some apps running in the background may be preferrable
+**Note:** For some apps running in the background may be preferable
 to this new pause and resume behavior. To run in the background
 and still avoid losing progress, the app could save its state to disk
 periodically and load the last state at the start of `android_main`.

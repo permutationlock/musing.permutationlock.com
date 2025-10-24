@@ -28,7 +28,7 @@ it had to:
  2. compile with any C compiler that supports the C99 standard (or later);
  3. link with a basic `x86_64` assembly runtime (no `libc` or other libraries).
 
-The third restriction made C preprocesser directives mostly unnecessary,
+The third restriction made C preprocessor directives mostly unnecessary,
 so none were used (i.e. `#include` and `#define` were not allowed).
 That was undoubtedly a bit stupid, but I refer you to the project title.
 
@@ -149,7 +149,7 @@ clean_runtime:
 ```
 
 If we build and run our program it should terminate with an illegal
-instruciton.
+instruction.
 
 ```bash
 $ make
@@ -172,7 +172,7 @@ We will define a set of assembly functions to call from C
 that will execute
 system calls. The first argument to each function will be the system call
 number. Linux syscalls may have up to six arguments, so we will implement a
-separete function for each possible argument count. The registers are
+separate function for each possible argument count. The registers are
 re-arranged to place the syscall number in `rax` and the remaining arguments
 into the appropriate syscall argument registers.
 
@@ -326,7 +326,7 @@ linux/kernel/exit.c:992:SYSCALL_DEFINE1(exit, int, error_code)
 
 The syscall number for `exit` is `60` and it takes a single integer
 `error_code` argument. The error code indicates
-whether the process completed successfully or encounterd an error.
+whether the process completed successfully or encountered an error.
 
 ```bash
 $ make
@@ -393,7 +393,7 @@ Now we can write a classic greeting program. The first argument we
 need to pass to the `write` syscall is the file descriptor that
 we want to write
 to. There are three file descriptors that are open by default for all
-processes: descriptor `0` is standared input, descriptor `1` is standard
+processes: descriptor `0` is standard input, descriptor `1` is standard
 output, and descriptor `2` is standard error.
 
 ```c
@@ -498,7 +498,7 @@ static i32 close(i32 fd) {
 
 We can now open files, read and write to them, and close them. For a simple
 example we will have our program try to open a file `name.txt`. If the file
-opens successfuly, the program will read the contents into the `name` character
+opens successfully, the program will read the contents into the `name` character
 array.
 If the file fails to open, the program will
 ask the user to enter a name and then read the name from the standard input
@@ -723,7 +723,7 @@ We will only be looking for the `POLLIN` event that signals when a file
 descriptor has data available to be read.
 
 As an example we can change our program to poll for data on the standard
-input file descriptor while it loops printing elipses.
+input file descriptor while it loops printing ellipses.
 
 ```c
 /* ... */
@@ -1026,7 +1026,7 @@ foo(i);
 int x = *i;
 ```
 
-The implemenation of `foo` is defined in a separate translation unit as follows.
+The implementation of `foo` is defined in a separate translation unit as follows.
 
 ```c
 void foo(int *i) {
@@ -1112,7 +1112,7 @@ Reading from the standard input works for text lines, but for realtime key
 presses we really need direct access to the keyboard device.
 
 If the `/dev`
-fileystem has been mounted correctly then a `/dev/input` directory will exist
+filesystem has been mounted correctly then a `/dev/input` directory will exist
 and contain a file for each input device.
 We don’t know which file corresponds to the keyboard that the user
 will actually be pressing keys on, so we’ll simply have to iterate through
@@ -1473,7 +1473,7 @@ i32 main(i32 argc, char **argv) {
 ```
 
 Our program will now print a dot every second until the user presses the `ESC`
-key. Note that this program needs to have permissions to open and acqure
+key. Note that this program needs to have permissions to open and acquire
 keyboard devices from `/dev/input`, so non-root users will likely need to
 run with `sudo ./dumb_cycle`.
 					
@@ -1485,8 +1485,8 @@ keyboard. Because of this, it is not desirable (or generally possible) to
 test the game on a system that is already running a traditional X11 or
 Wayland window manager.
 
-Luckliy, building a bare-bones Linux system and running it
-in a [QEMU](https://www.qemu.org/) virtual machine is fairly simple to acomplish.
+Luckily, building a bare-bones Linux system and running it
+in a [QEMU](https://www.qemu.org/) virtual machine is fairly simple to accomplish.
 Testing the game on such a basic system
 will also help to ensure that the game only depends on the
 Linux kernel and the corresponding drivers.
@@ -1494,10 +1494,10 @@ Linux kernel and the corresponding drivers.
 In order to boot a Linux system to run our game we need a kernel and a method
 to set up `/dev/` with at least `/dev/dri/` and `/dev/input/`.
 If we want to do any sort of debugging, even “printf debugging,” we will also
-need a shell and some command line utilites.
+need a shell and some command line utilities.
 
-I have [precompiled binaries](<$link.asset("vm.tar.gz")>) available for the
-[linux kernel](https://github.com/torvalds/linux) and
+I have [pre-compiled binaries](<$link.asset("vm.tar.gz")>) available for the
+[Linux kernel](https://github.com/torvalds/linux) and
 [toybox](https://github.com/landley/toybox), but
 [source is available](<$link.asset("vm_src.tar.gz")>) to build each from scratch.
 We’ll add the following rule to our `Makefile` to download and extract the `vm`
@@ -1510,7 +1510,7 @@ vm:
 ```
 
 After running `make vm` you should have a `vm` directory containing a kernel
-and an inital RAM filesystem. The filesystem
+and an initial RAM filesystem. The filesystem
 contains a `/bin` directory set up with toybox and an `init` script to
 mount the `/dev`, `/proc`, and `/sys`
 directories and run `dumb_cycle` in a `/bin/sh` shell.
@@ -1919,7 +1919,7 @@ i32 main(i32 argc, char **argv) {
 /* ... */
 ```
 
-We can retreive an encoder in a similar manner.
+We can retrieve an encoder in a similar manner.
 						
 ```c
 /* ... */
@@ -2683,8 +2683,8 @@ re-draw and swap the buffers every time a refresh
 occurs.
 
 We will also track elapsed time to ensure
-one game update happens exactly once every timepstep.
-Moreover, we will have key preses update the velocity
+one game update happens exactly once every timestep.
+Moreover, we will have key presses update the velocity
 only after a game update, to avoid jumps in partially
 drawn squares.
 

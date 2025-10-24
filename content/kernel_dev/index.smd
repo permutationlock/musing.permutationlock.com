@@ -9,36 +9,45 @@
 
 I have been a Linux user space programmer for well over ten years, but only
 recently dipped my toe into kernel development.
-In this article I'll go over Linux system emulation, the basics of
-the Linux kernel build system, the structure of a kernel module C project,
-the key kernel module utilities (`insmod`, `rmmod`, `modprobe`),
-and debugging code that runs in kernel space with `gdb`.
+In this article I'll go over the Linux kernel build system, kernel modules,
+basic initramfs system emulation,
+debugging code that runs in kernel space, and testing
+kernel code within a full Linux distribution.
 
 ## Requirements
 
-I will assume that we are working on a modern Linux system.
+I will assume that we are working in a standard `bash`-like shell on a modern
+Linux system.
+
 We will first need to install the [Linux kernel build dependencies][35].
-On almost all Linux distributions, these will be available through
-the package manager. To install the development version of a
-library (i.e. to install header files and [`pkg-config`][36] files in addition
-to the library itself), the development package will often be required.
+More comprehensively, we will need [`binutils`][51], [`gcc`][52],
+[`bc`][39], [`flex`][41], [`bison`][42],
+[`tar`][43], [`xz`][44], [`gzip`][45], [`rsync`][54], [`perl`][53], and [`python`][48].
+We'll also need the tools, C headers, and libraries from [`elfutils`][38],
+[`gettext`][40], and [`openssl`][46].
+
+These should be available through a package manager on every Linux
+distribution. To install the header and [`pkg-config`][47] files alongside
+a library, the development version of a package may be required (generally
+named with a `-dev` or `-devel` suffix). E.g. on [Alpine Linux][49] we would
+need to install the [`elfutils-dev`][50] package.
 
 For system emulation we will need the
-`qemu-system-xxx` emulator for our target architecture .
+[`qemu-system-ARCH`][55] emulator for our target architecture.
 To take advantage
 of [KVM][2] (and avoid having to set up a cross-compilation toolchain),
 the emulated system architecture should match our
-physical hardware; e.g. if our host system is running on an
+physical hardware. E.g. if our host system is running on an
 `x86_64` CPU, then we should install and use `qemu-system-x86_64`.
 
-Finally, to debug kernel space code, we will need the GNU debugger ([`gdb`][7]).
+Finally, we will need the GNU debugger [`gdb`][7] to debug kernel and user
+space code.
 
 ## Building the Linux kernel
 
 The Linux kernel uses a `make`-based build system called `Kbuild` and
-a custom `Kconfig` configuration system. We'll delve a little into
-how both of these work in the kernel module section, but for now
-we just need to clone the kernel source and use `make` to configure and
+a custom `Kconfig` configuration system. For now
+we'll simply pull the Linux source and use `make` to configure and
 build the kernel.
 
 ```bash
@@ -86,7 +95,6 @@ CONFIG_MODULE_UNLOAD=y
 CONFIG_DEBUG_INFO=y
 CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
 CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
-CONFIG_GDB_SCRIPTS=y
 CONFIG_FRAME_POINTER=y
 CONFIG_RANDOMIZE_BASE=n # optional, may use `nokaslr` parameter instead
 
@@ -163,15 +171,24 @@ then it will compile a binary targeting the C "runtime" for the host system. I.e
 it will assume that the host lib directories (`/lib`, `/usr/lib`, etc.) are
 present in the initial RAM filesystem.
 
-We could copy our host sysroot directly into the initramfs, but an easier
+We could copy the relevant parts of our host sysroot directly into the initramfs,
+but an easier and more reliable
 option is to use the `nolibc` static C runtime provided by the Linux kernel.
 The kernel build system exposes a `make` command to produce a `nolibc`
 build sysroot.
 
+**Note:** We could also use a feature complete libc that
+supports static linking, e.g. [`musl`][36]. This is generally the
+way to go when you need a drop-in replacement for GNU libc to
+build an existing project.
+We'll use `nolibc` here because we will be
+writing our C code from scratch and it is simple, interesting, and
+provided with the kernel source code.
+
 ```bash
 $ mkdir nolibc
 $ make -C linux-6.17/tools/include/nolibc \
->    ARCH=x86_64 OUTPUT=nolibc/ headers_standalone
+>    ARCH=x86_64 OUTPUT=$PWD/nolibc/ headers_standalone
 ```
 
 By default, the Linux kernel will mount the inital RAM filesystem as `/`
@@ -245,9 +262,27 @@ Pressing the `Enter` key should kill the virtual machine.
 
 In this section we will attach a `gdb` session to the kernel process
 running in our `qemu` virtual machine. Our kernel was
-built with debug information and `gdb` python scripts enabled (see
-`kvm_debug_guest.config`), so all we need to do before we can open
-`gdb` is add a few `qemu` flags.
+built with debug information enabled and [Kernel Address Space Layout Randomization
+(KASLR)][56] disabled, so there are only a few things left to do
+before we can open `gdb`.
+
+First, we need to build the kernel's `gdb` python scripts. We also
+need to add a line to our `gdbinit` config file to inform
+`gdb` that these scripts are safe to load.
+
+```bash
+$ make -C linux-6.17 O=$PWD/linux-6.17_build scripts_gdb
+$ mkdir -p ~/.config/gdb
+$ echo "set auto-load safe-path $PWD/linux-6.17_build/" \
+>     >> ~/.config/gdb/gdbinit
+```
+
+**Note:** The command appended above will overwrite any existing
+auto-load safe paths set in `gdbinit`. If your `gdbinit` needs to
+allow auto-loading scripts from multiple
+paths, then you must make single `set` call listing all safe paths.
+
+Finally, when we run the VM we'll have to add a couple of extra flags.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s -S \
@@ -323,24 +358,23 @@ Our current initramfs contains a single `init` binary we compiled using
 or building bespoke devices, in general we expect Linux systems to provide
 a Unix style shell with a standard set of command line utilities.
 Most GNU+Linux distributions
-use the [GNU core utilites][20], but these are a somewhat heavy dependency
+use the [GNU core utilities][20], but these are a somewhat heavy dependency
 and provide far more than we need for a simple debug system.
 
 There are several Unix-in-a-box projects that provide a single
-"swiss army knife binary" containing all of the basic command-line utilites,
+"Swiss army knife binary" containing all of the basic command-line utilities,
 the most popular being [`busybox`][11] and
 [`toybox`][12]. We'll be using `toybox` for our initramfs in this section, but later
-we'll build an Alpine Linux system based on `busybox`.
+we'll build an [Alpine Linux][49] system based on `busybox`.
 
 ```bash
 $ wget https://landley.net/toybox/downloads/binaries/latest/toybox-x86_64
 $ chmod +x toybox-x86_64
-$ mkdir toybox/ccc
+$ mkdir -p init_toybox/bin
 $ mkdir -p init_toybox/dev
+$ mkdir -p init_toybox/home
 $ mkdir -p init_toybox/proc
 $ mkdir -p init_toybox/sys
-$ mkdir -p init_toybox/bin
-$ mkdir -p init_toybox/home
 $ mv toybox-x86_64 init_toybox/bin/toybox
 $ cd init_toybox/bin
 $ for i in $(./toybox); do ln -s toybox $i; done
@@ -348,7 +382,7 @@ $ cd ../..
 ```
 
 **Note:** If you are uncomfortable downloading the `toybox` binary,
-you may also build it from source. You will need to use a C toolchain
+you may instead build it from source. You will need to use a C toolchain
 capable of building static `x86_64` binaries, e.g. a `gcc` or `clang`
 toolchain based on [`musl` libc][36].
 
@@ -362,7 +396,7 @@ equivalent to executing `./bin/toybox sh` which starts a shell.
 
 Instead of compiling a static `init` ELF binary from C, we will write
 a shell script to be executed with `bin/sh`. The init script below is
-inspired by the init script generated by `toybox/mkroot/mkroot.sh`.
+inspired by the init script generated by [`toybox/mkroot`][31].
 
 **Note:** When a [shebang][18] (`#!`) appears at the start of a text file,
 the file may be used as if it were a binary executable. The path following the shebang
@@ -401,7 +435,7 @@ down piece-by-piece.
    running `/bin/sh` as its initial process.
  2. The `n<>file` command opens `file` for reading and writing on file descriptor `n`. If
    no `n` is specified, then it defaults to descriptor `0`. Thus 
-   `<>/dev/tty0` opens `/dev/tty0` for reading and writing on file descriptor `0`.
+   `<>/dev/ttyS0` opens `/dev/ttyS0` for reading and writing on file descriptor `0`.
  3. The `n>&m` command makes file descriptor `n` a copy of the output
    file descriptor `m`. If `n` is not specified, then it defaults to descriptor `1`.
    Thus `>&0` makes descriptor `1` an output copy of descriptor `0`,
@@ -409,7 +443,7 @@ down piece-by-piece.
 
 Taken together, the `setsid` line creates a new session
 with the same controlling `tty` as `init` that runs `/bin/sh` in its
-inital process with `/dev/tty0` open as input on
+initial process with `/dev/ttyS0` open as input on
 file descriptor `0` and output on descriptors `1` and `2`. In other words,
 it just starts a shell session with the stdin, stdout,
 and stderr file descriptors!
@@ -577,8 +611,8 @@ In this section we'll go over how to install a Linux distribution on a
 virtual drive using `qemu`, and then how to build, install, and debug
 a custom Linux kernel and/or kernel modules within the virtual machine.
 
-We'll be using Alpine Linux because it is a small and simple
-distroy based on [musl libc][26] and the [`busybox`][11] swiss-army-knife.
+We'll be using [Alpine Linux][49] because it is a small and simple
+distro based on [musl libc][26] and the [`busybox`][11] Swiss army knife.
 The same basic process should work for any distribution, but the
 package manager, init system, and bootloader may differ.
 
@@ -593,24 +627,25 @@ $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
 >     -boot d
 ```
 
-First, we pull a virtual machine `.iso` image for Alpine linux. Then we create a
-`12GB` disk image that will store the disk partitions for our virtual machine. We'll
-need at least 10GB of disk space to fit our Alpine install and still have room to build
+First, we pull a virtual machine `.iso` image for Alpine Linux. Then we create a
+`12GB` file that will serve as a raw disk image and store the partitions for
+our virtual machine. We'll
+need at least that much disk space to fit our Alpine install and still have room to build
 and install a custom Linux kernel.
 
 Then we boot a `qemu` virtual machine from the Alpine `.iso` image.
 The `-m` argument specifies the memory to allocate to the VM and `-smp`
 species the number of processor cores. The `-drive` argument specifies
 our new `hda.img` image to be the first hard disk provided to the VM. The
-`-cdrom` argument specifies the Alpine `.iso` file to be provided as a CDROM
+`-cdrom` argument specifies the Alpine `.iso` file to be provided as a CD ROM
 device. The `-boot d` argument tells the VM to boot from the CD drive.
 
 You may optionally add `-nographic` and
-`-display curses` to tell `qemu` to use [`ncurses`][21] to display the VM within the termial
+`-display curses` to tell `qemu` to use [`ncurses`][21] to display the VM within the terminal
 emulator instead of a separate graphical window.
 
 Once the machine boots, we should be presented with a `login:` prompt. We may enter `root`
-and press enter to move to the install shell environment.
+to move to a root shell environment.
 
 Next we'll execute `setup-alpine` and accept the
 default option for every prompt except for time zone, user, and disk drive.
@@ -632,9 +667,8 @@ We can now log in as `root` with the password we set up during installation.
 
 Exiting back to our host system, we can also use our `hda.img` disk as a
 [loop device][22] to mount the VM filesystem within our host filesystem.
-Then, with the filesystem mounted, we can [`chroot`][23] in and use the guest
-system without the indirection of a virtual machine. This allows us to use all CPU cores and memory
-available without the indirection of a VM, e.g. to compile the Linux kernel.
+Then we can use [`chroot`][23] to work with the Alpine
+sysroot without the indirection of a virtual machine.
 
 ```bash
 # chroot.sh
@@ -646,12 +680,12 @@ mount /dev/loop0p3 $PWD/mnt
 mount /dev/loop0p1 $PWD/mnt/boot
 
 # setup `/dev`, `/proc`, and `/sys` in `mnt`
-mknod -m 666 $PWD/mnt/dev/full c 1 7 && chmod 666 $PWD/mnt/dev/full
-mknod -m 666 $PWD/mnt/dev/ptmx c 5 2 && chmod 666 $PWD/mnt/dev/ptmx
-mknod -m 644 $PWD/mnt/dev/random c 1 8 && chmod 644 $PWD/mnt/dev/random
-mknod -m 644 $PWD/mnt/dev/urandom c 1 9 && chmod 644 $PWD/mnt/dev/urandom
-mknod -m 666 $PWD/mnt/dev/zero c 1 5 && chmod 666 $PWD/mnt/dev/zero
-mknod -m 666 $PWD/mnt/dev/tty c 5 0 && chmod 666 $PWD/mnt/dev/tty
+mknod -m 666 $PWD/mnt/dev/full c 1 7
+mknod -m 666 $PWD/mnt/dev/ptmx c 5 2
+mknod -m 644 $PWD/mnt/dev/random c 1 8
+mknod -m 644 $PWD/mnt/dev/urandom c 1 9
+mknod -m 666 $PWD/mnt/dev/zero c 1 5
+mknod -m 666 $PWD/mnt/dev/tty c 5 0
 mount -t proc none $PWD/mnt/proc
 mount -o bind /sys $PWD/mnt/sys
 
@@ -679,11 +713,18 @@ umount $PWD/mnt
 losetup -D /dev/loop0
 ```
 
+We will need to run the `chroot.sh` script with `root` permissions. E.g.
+run the script with `sudo` or first `su` and then execute the script.
+
 From within our Alpine Linux `chroot` shell we can install the packages required
 to build a custom Linux kernel, then pull and build a debug kernel.
 
+**Note:** All of this could be done from within the VM of course, but I
+find it much more efficient to work in a shell directly on the host system.
+
 ```bash
-$ ./chroot.sh
+$ chmod +x chroot.sh
+$ sudo ./chroot.sh
 (chroot) $ apk add build-base linux-headers linux-virt-dev diffutils openssl-dev
 (chroot) $ cd /root
 (chroot) $ wget https://github.com/torvalds/linux/archive/refs/tags/v6.17.tar.gz
@@ -691,16 +732,16 @@ $ ./chroot.sh
 (chroot) $ mkdir linux-6.17_build
 (chroot) $ cp /boot/config-* linux-6.17_build/.config
 (chroot) $ echo "
-         > CONFIG_DEBUG_INFO=y
-         > CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
-         > CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
-         > CONFIG_GDB_SCRIPTS=y
-         > CONFIG_FRAME_POINTER=y
-         > CONFIG_RANDOMIZE_BASE=n
-         > CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
-         > " >> linux-6.17_build/.config
+(chroot) > CONFIG_DEBUG_INFO=y
+(chroot) > CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+(chroot) > CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+(chroot) > CONFIG_FRAME_POINTER=y
+(chroot) > CONFIG_RANDOMIZE_BASE=n
+(chroot) > CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
+(chroot) > " >> linux-6.17_build/.config
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build olddefconfig
 (chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build -j $(nproc)
+(chroot) $ make -C linux-6.17 O=$PWD/linux-6.17_build scripts_gdb
 ```
 
 We can then install our custom kernel and build an associated initramfs.
@@ -712,43 +753,64 @@ We can then install our custom kernel and build an associated initramfs.
 (chroot) $ mkinitfs -o /boot/initramfs-6.17.0 -b / 6.17.0
 ```
 
-Finally, we can modify our bootloader configuration to
-add a default entry to boot from our new kernel and initrafms. The default
+Finally, we need to  modify our bootloader configuration to
+add a default entry to boot from our new kernel and initramfs. The default
 bootloader for Alpine is [syslinux][24]. Below we use
 the `update-extlinux` utility, but the `/boot/extlinux.conf` file
 is fairly simple and may edited manually.
 
-```bash
-(chroot) $ echo "
-         > default=1
-         > " >> /etc/update-extlinux.conf
-(chroot) $ update-extlinux
-```
-
-Next we can exit our `chroot` in order to boot the kernel in a VM.
-Prior to this, however, we'll install `gdb` inside the VM filesystem.
+However, the bootloader needs
+to know the disk device the system will be booting from, in our case
+`/dev/sda`. But our `chroot` environment is mounted within our host system
+with no `/dev/sda` device (and if we added the `/dev/sda` node, it would be
+the `/dev/sda` device for the host, not the virtual machine). Thus we'll need
+to exit the `chroot` and boot the VM in order to configure the bootloader.
 
 ```bash
-(chroot) $ apk add gdb
-(chroot) $ mkdir -p /root/.config/gdb
-(chroot) $ echo "set auto-load safe-path /" > /root/.config/gdb/gdbinit
 (chroot) $ exit
+$ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 \
+>     -drive file=hda.img,format=raw
+```
+After logging in once more, we can set our new `6.17.0` kernel to be the default
+and update the `extlinux` bootloader config.
+
+```bash
+(vm) $ echo "
+(vm) > default=1
+(vm) > " >> /etc/update-extlinux.conf
+(vm) $ update-extlinux
 ```
 
-The `gdbinit` file tells `gdb` to allow loading python scripts from any
-subdirectory under `/`. If you find this too unsafe, you can instead add
-only the path to our kernel build `/root/linux-6.17_build/`.
+Finally, we can shut down the VM and boot our freshly
+compiled debug kernel. But first we'll install `gdb` inside the VM.
 
-Now we can try booting the VM and debugging our newly installed kernel.
+```bash
+(vm) $ apk add gdb
+(vm) $ mkdir -p /root/.config/gdb
+(vm) $ echo "set auto-load safe-path /root/linux-6.17_build/"
+(vm) >     > /root/.config/gdb/gdbinit
+(vm) $ poweroff
+```
+
+Now we can boot the VM for debugging. We'll add the `-snapshot` argument
+so that filesystem changes are written to a temporary snapshot rather than
+to `hda.img`. This avoids corruption when we use the
+mounted filesystem in a chroot at the same time that the VM is running.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 -s -S \
 >     -snapshot -drive file=hda.img,format=raw &
 ```
 
-The `-snapshot` argument will write filesystem changes to temporary files rather than
-the system image. This is useful to avoid corruption while we use the
-mounted filesystem in a chroot at the same time the VM is running. It is similarly
+After logging into the VM, we can verify that the correct kernel booted
+by running `uname`.
+
+```bash
+(vm) $ uname -r
+(vm) 6.17.0
+```
+
+It is similarly
 important to never modify the filesystem from our `chroot` while the VM is running.
 Thus we'll make a second `chroot` script that mounts the VM
 filesystem as read-only and jumps directly into `gdb`.
@@ -775,20 +837,20 @@ read-only copy of our Alpine sysroot.
 
 ```bash
 $ chmod +x gdb.sh
-$ ./gdb.sh
-(gdb) file /root/linux-6.17_build/vmlinux
-Reading symbols from /root/linux-6.17_build/vmlinux...
-(gdb) target remote :1234
-Remote debugging using :1234
-0x000000000000fff0 in ?? ()
-(gdb) hbreak start_kernel
-Hardware assisted breakpoint 1 at 0xffffffff82a01280: file /root/linux-6.17/init/main.c, line 898.
-(gdb) c
-Continuing.
-
-Breakpoint 1, start_kernel () at /root/linux-6.17/init/main.c:898
-898    {
-(gdb)
+$ sudo ./gdb.sh
+(chroot) (gdb) file /root/linux-6.17_build/vmlinux
+(chroot) Reading symbols from /root/linux-6.17_build/vmlinux...
+(chroot) (gdb) target remote :1234
+(chroot) Remote debugging using :1234
+(chroot) 0x000000000000fff0 in ?? ()
+(chroot) (gdb) hbreak start_kernel
+(chroot) Hardware assisted breakpoint 1 at 0xffffffff82a01280: file /root/linux-6.17/init/main.c, line 898.
+(chroot) (gdb) c
+(chroot) Continuing.
+(chroot) 
+(chroot) Breakpoint 1, start_kernel () at /root/linux-6.17/init/main.c:898
+(chroot) 898    {
+(chroot) (gdb)
 ```
 
 We now have a simple process to develop the Linux kernel and/or out-of-tree
@@ -796,19 +858,21 @@ kernel modules in a `chroot`, and debug the kernel space code by attaching
 `gdb` to a `qemu` VM.
 
 Note that we also have `gdb` available within the VM itself, so it is possible
-to simultaneously debug userspace code that is interacting with the kernel.
+to simultaneously debug user space code that is interacting with the kernel.
 
 ## Building and debugging OpenZFS
 
-In this section we'll build a debug version of the ZFS filesystem modules
-and user space tools and debug them in our Alpine VM. First, we'll need to
-`chroot` into our Alpine sysroot, install a few required packages, downlaod
+In this section we'll build a debug version of the ZFS filesystem kernel modules
+and user space tools, and debug them in our Alpine VM.
+
+First we'll
+`chroot` into our Alpine sysroot, install a few required packages, download
 the ZFS source code release, and build the project.
 
 ```bash
-$ ./chroot.sh
+$ sudo ./chroot.sh
 (chroot) $ apk add libtool automake autoconf util-linux-dev \
-         >     libtirpc-dev gettext-dev zfs-udev
+(chroot) >     libtirpc-dev gettext-dev zfs-udev
 (chroot) $ cd /root
 (chroot) $ wget https://github.com/openzfs/zfs/archive/refs/tags/zfs-2.4.0-rc2.tar.gz
 (chroot) $ tar -xvf zfs-2.4.0-rc2.tar.gz
@@ -816,13 +880,14 @@ $ ./chroot.sh
 (chroot) $ export CFLAGS="-fno-tree-vectorize"
 (chroot) $ export CXXFLAGS="-fno-tree-vectorize"
 (chroot) $ export LIBS="-lintl"
+(chroot) $ sh autoconf.sh
 (chroot) $ ./configure --with-linux=/root/linux-6.17 \
-         >     --with-linux-obj=/root/linux-6.17_build \
-         >     --with-tirpc \
-         >     --with-udevdir=/usr/lib/udev \
-         >     --disable-systemd \
-         >     --enable-debuginfo \
-         >     --enable-debug
+(chroot) >     --with-linux-obj=/root/linux-6.17_build \
+(chroot) >     --with-tirpc \
+(chroot) >     --with-udevdir=/usr/lib/udev \
+(chroot) >     --disable-systemd \
+(chroot) >     --enable-debuginfo \
+(chroot) >     --enable-debug
 (chroot) $ make -j$(nproc)
 (chroot) $ exit
 ```
@@ -833,18 +898,18 @@ looking at the package repository is generally a good strategy to discover how a
 piece of software can be built from source.
 
 Our Alpine sysroot should now have a fresh debug version of ZFS built against
-our debug Linux 6.17 kernel. Next we can boot our VM and chroot back into
-the sysroot to debug.
+our debug Linux 6.17 kernel. Next we can boot our VM and chroot back in to `gdb`.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 -s \
 >     -snapshot -drive file=hda.img,format=raw  &
 $ ./gdb.sh
-(gdb) file /root/linux-6.17_build/vmlinux
-Reading symbols from /root/linux-6.17_build/vmlinux...
-(gdb) target remote :1234
-Remote debugging using :1234
-(gdb) 
+(chroot) (gdb) file /root/linux-6.17_build/vmlinux
+(chroot) Reading symbols from /root/linux-6.17_build/vmlinux...
+(chroot) (gdb) target remote :1234
+(chroot) Remote debugging using :1234
+(chroot) (gdb) c
+(chroot) Continuing.
 ```
 
 On the VM side we will install the ZFS modules and utilities, and then load the `zfs`
@@ -859,21 +924,24 @@ dependency).
 
 Now that the `zfs` module has been loaded into the kernel, we'll run the
 `lx-symbols` command from the Linux kernel `gdb` scripts in order to find
-the debug symbols for the `zfs` module. Then we'll add a breakpoint for
+the debug symbols for the `zfs` module. In our `gdb` session
+we'll `Ctrl+C` to pause the kernel process, then add a breakpoint for
 the `zfsdev_ioctl` function that is called whenever an [`ioctl`][28]
 syscall is issued against the `/dev/zfs` character device.
 
 ```bash
-(gdb) lx-symbols
-loading vmlinux
-scanning for modules in /
-loading @0xffffffffa0c00000: /root/zfs-2.4.0-rc2/module/zfs.ko
-loading @0xffffffffa084d000: /root/zfs-2.4.0-rc2/module/spl.ko
-# ...
-(gdb) b zfsdev_ioctl
-Breakpoint 4 at 0xffffffffa0ea4f60: file /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c, line 132.
-(gdb) c
-Continuing.
+(chroot) ^C
+(chroot) Program recieved signal SIGINT, Interrupt.
+(chroot) (gdb) lx-symbols
+(chroot) loading vmlinux
+(chroot) scanning for modules in /
+(chroot) loading @0xffffffffa0c00000: /root/zfs-2.4.0-rc2/module/zfs.ko
+(chroot) loading @0xffffffffa084d000: /root/zfs-2.4.0-rc2/module/spl.ko
+(chroot) # ...
+(chroot) (gdb) b zfsdev_ioctl
+(chroot) Breakpoint 4 at 0xffffffffa0ea4f60: file /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c, line 132.
+(chroot) (gdb) c
+(chroot) Continuing.
 ```
 
 Finally, we can test that our breakpoint is working.
@@ -883,10 +951,10 @@ Finally, we can test that our breakpoint is working.
 ```
 
 ```bash
-Breakpoint 1, zfsdev_ioctl (filp=0xffff88800739a900, cmd=23044, arg=140736606537392)
-    at /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c:132
-132	{
-(gdb) 
+(chroot) Breakpoint 1, zfsdev_ioctl (filp=0xffff88800739a900, cmd=23044, arg=140736606537392)
+(chroot)     at /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c:132
+(chroot) 132	{
+(chroot) (gdb) 
 ```
 
 In order to fully test the `zfs` we could create further raw disk image
@@ -894,19 +962,19 @@ files and provide them to `qemu` as drives.
 
 ## Further reading
 
-The root source of information on debugging the Linux is
-the [kernel documentation][37].
+The root source of information on debugging the Linux kernel is
+the [official documentation][37].
 
 For more information on Linux kernel module development, the
 [Linux Kernel Module Programming Guide][29] is fantastic. I also
-learned a lot from tinkering with this nice
+learned a lot by tinkering with this
 [`ioctl` driver example][30].
 
-The [`toybox`][12] project includes its own ['mkroot'][31] system to
+The [`toybox`][12] project includes its own [`mkroot`][31] system to
 automatically build a complete initramfs from scratch. A lot of my
 knowledge of initramfs comes from studying `mkroot`.
 
-Above we used simple raw images for our virutal drives, but `qemu` also
+Above we used simple raw images for our virtual drives, but `qemu` also
 supports the [`qcow2`][32] (Qemu Copy On Write 2) format. Such drives
 cannot be mounted as simple `/dev/loopX` devices, but can be
 mounted as `/dev/nbdX` [network block devices][34] via [`qemu-nbd`][33].
@@ -948,3 +1016,22 @@ mounted as `/dev/nbdX` [network block devices][34] via [`qemu-nbd`][33].
 [35]: https://www.kernel.org/doc/html/latest/process/changes.html
 [36]: https://musl.libc.org/
 [37]: https://www.kernel.org/doc/html/latest/process/debugging/gdb-kernel-debugging.html
+[38]: https://sourceware.org/elfutils/
+[39]: https://www.gnu.org/software/bc/manual/html_mono/bc.html
+[40]: https://www.gnu.org/software/gettext/
+[41]: https://github.com/westes/flex
+[42]: https://www.gnu.org/software/bison/
+[43]: https://www.gnu.org/software/tar/
+[44]: https://tukaani.org/xz/
+[45]: https://www.gnu.org/software/gzip/
+[46]: https://www.openssl.org/
+[47]: https://www.freedesktop.org/wiki/Software/pkg-config/
+[48]: https://www.python.org/
+[49]: https://www.alpinelinux.org/
+[50]: https://pkgs.alpinelinux.org/package/v3.17/main/x86_64/elfutils-dev
+[51]: https://www.gnu.org/software/binutils/
+[52]: https://www.gnu.org/software/gcc/
+[53]: https://www.perl.org/
+[54]: https://rsync.samba.org/
+[55]: https://www.qemu.org/
+[56]: https://lwn.net/Articles/569635/
