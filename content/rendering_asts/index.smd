@@ -637,6 +637,11 @@ AVEN_C_LEX_STATE_NONE:
             goto AVEN_C_LEX_STATE_NUM;
         }
         /* ... */
+        case '.': {
+            ctx->index += 1;
+            goto AVEN_C_LEX_STATE_DOT;
+        }
+        /* ... */
         case 0: {
             goto AVEN_C_LEX_STATE_DONE;
         }

@@ -811,7 +811,8 @@ by running `uname`.
 ```
 
 It is similarly
-important to never modify the filesystem from our `chroot` while the VM is running.
+important to avoid modifying `hda.img` from our `chroot` while the
+VM is running.
 Thus we'll make a second `chroot` script that mounts the VM
 filesystem as read-only and jumps directly into `gdb`.
 
@@ -898,11 +899,11 @@ looking at the package repository is generally a good strategy to discover how a
 piece of software can be built from source.
 
 Our Alpine sysroot should now have a fresh debug version of ZFS built against
-our debug Linux 6.17 kernel. Next we can boot our VM and chroot back in to `gdb`.
+our debug Linux 6.17 kernel. We can now boot our VM and chroot back in to `gdb`.
 
 ```bash
 $ qemu-system-x86_64 --enable-kvm -cpu host -m 512M -smp 2 -s \
->     -snapshot -drive file=hda.img,format=raw  &
+>     -snapshot -drive file=hda.img,format=raw &
 $ ./gdb.sh
 (chroot) (gdb) file /root/linux-6.17_build/vmlinux
 (chroot) Reading symbols from /root/linux-6.17_build/vmlinux...
@@ -954,11 +955,11 @@ Finally, we can test that our breakpoint is working.
 (chroot) Breakpoint 1, zfsdev_ioctl (filp=0xffff88800739a900, cmd=23044, arg=140736606537392)
 (chroot)     at /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c:132
 (chroot) 132	{
-(chroot) (gdb) 
+(chroot) (gdb) c
+(chroot) Continuing.
 ```
 
-In order to fully test the `zfs` we could create further raw disk image
-files and provide them to `qemu` as drives.
+We were able to set and hit a breakpoint inside the `zfs` module!
 
 ## Further reading
 
