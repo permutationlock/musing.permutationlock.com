@@ -817,7 +817,7 @@ sysroot without the indirection of a virtual machine.
 
 # mount the hda image in our host filesystem
 losetup /dev/loop0 -P hda.img
-mkdir -p $PWD/mnt
+mkdir $PWD/mnt
 mount /dev/loop0p3 $PWD/mnt
 mount /dev/loop0p1 $PWD/mnt/boot
 
@@ -962,8 +962,8 @@ filesystem as read-only and jumps directly into `gdb`.
 # gdb.sh
 
 # mount the hda root partition as read-only in our host filesystem
-losetup /dev/loop0 -P hda.img
-mkdir -p $PWD/mnt
+losetup /dev/loop0 -r -P hda.img
+mkdir $PWD/mnt
 mount -o ro /dev/loop0p3 $PWD/mnt
 
 # `chroot` into a gdb session
