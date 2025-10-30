@@ -4,7 +4,9 @@
 .author = "Aven",
 .layout = "post.shtml",
 .draft = false,
-.custom = {},
+.custom = {
+    "git" : "linux_kernel_module_debugging"
+},
 ---
 
 I have been a Linux user space programmer for well over ten years, but only
@@ -21,7 +23,7 @@ Linux system.
 
 We will first need to install the [Linux kernel build dependencies][35].
 More comprehensively, we will need [`binutils`][51], [`gcc`][52],
-[`bc`][39], [`flex`][41], [`bison`][42],
+[`bc`][39], [`cpio`][57], [`flex`][41], [`bison`][42],
 [`tar`][43], [`xz`][44], [`gzip`][45], [`rsync`][54], [`perl`][53], and [`python`][48].
 We'll also need the tools, C headers, and libraries from [`elfutils`][38],
 [`gettext`][40], and [`openssl`][46].
@@ -303,13 +305,13 @@ Reading symbols from /home/aven/linux_kvm_debug/linux-6.17_build/vmlinux...
 Remote debugging using :1234
 0x000000000000fff0 in ?? ()
 (gdb) hbreak start_kernel
-Hardware assisted breakpoint 1 at 0xffffffff81a6d630: file /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/init/main.c, line 899.
+Hardware assisted breakpoint 1 at 0xffffffff81a6d630: file /home/aven/linux_kvm_debug/linux-6.17/init/main.c, line 899.
 (gdb) c
 Continuing.
 
 Breakpoint 1, start_kernel ()
-    at /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/init/main.c:899
-899		char *command_line;
+    at /home/aven/linux_kvm_debug/linux-6.17/init/main.c:899
+899     char *command_line;
 (gdb)
 ```
 
@@ -342,8 +344,8 @@ Hardware assisted breakpoint 3 at 0xffffffff814156a4: file /home/aven/linux_kvm_
 Continuing.
 
 Breakpoint 2, __do_sys_write (fd=1, buf=0x7ffde9ee7c51 "Hello, World!\n", count=15)
-    at /home/aven/docs/projects/vms/kvm_dbg/linux-6.17/fs/read_write.c:749
-749		return ksys_write(fd, buf, count);
+    at /home/aven/linux_kvm_debug/linux-6.17/fs/read_write.c:749
+749     return ksys_write(fd, buf, count);
 (gdb)
 ```
 
@@ -477,7 +479,7 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 (vm) $ 
 ```
 
-## Building kernel modules
+## Building and debugging kernel modules
 
 The Linux kernel allows code to be dynamically loaded at runtime through
 modules. In that sense, modules are a loose kernel space equivalent
@@ -485,22 +487,114 @@ to user space shared libraries.
 
 Kernel modules are generally built using the `Kbuild` makefiles from
 the source tree of the Linux kernel being targeted. In this
-section we'll write a simple `"Hello, Kernel!"` module that prints a
-message to the kernel log ring buffer.
+section we'll write a simple `"Hello, Kernel!"` character device
+module that registers a `/dev/hello` device that a message can be read from.
 
 ```c
 /* hello_mod/hello.c */
 
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/printk.h>
+#include <linux/types.h>
+#include <linux/uaccess.h>
+#include <linux/version.h>
 
-static int __init hello_init(void) {
-    pr_info("Hello, Kernel!\n");
+#include <asm/errno.h>
+
+#define DEVICE_NAME "hello"
+
+static int major;
+static struct class *cls;
+
+static int hello_open(struct inode *inode, struct file *file);
+static int hello_release(struct inode *inode, struct file *file);
+static ssize_t hello_read(struct file *file, char __user *buf, size_t len,
+              loff_t *off);
+static ssize_t hello_write(struct file *file, const char __user *buf,
+               size_t len, loff_t *off);
+
+static struct file_operations hello_cdev_fops = {
+    .read = hello_read,
+    .write = hello_write,
+    .open = hello_open,
+    .release = hello_release,
+};
+
+static int __init hello_init(void)
+{
+    major = register_chrdev(0, DEVICE_NAME, &hello_cdev_fops);
+
+    if (major < 0) {
+        pr_alert("failed to register cdev %d\n", major);
+
+        return major;
+    }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    cls = class_create(DEVICE_NAME);
+
+#else
+    cls = class_create(THIS_MODULE, DEVICE_NAME);
+#endif
+
+    device_create(cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME);
+
+    pr_info("created /dev/%s\n", DEVICE_NAME);
+
     return 0;
 }
 
-static void __exit hello_exit(void) {
-    pr_info("Bye, Kernel :(\n");
+static void __exit hello_exit(void)
+{
+    device_destroy(cls, MKDEV(major, 0));
+    class_destroy(cls);
+    unregister_chrdev(major, DEVICE_NAME);
+
+    pr_info("destroyed /dev/%s\n", DEVICE_NAME);
+}
+
+static int hello_open(struct inode *inode, struct file *file)
+{
+    return 0;
+}
+
+static int hello_release(struct inode *inode, struct file *file)
+{
+    return 0;
+}
+
+static ssize_t hello_read(struct file *file, char __user *buf, size_t len,
+              loff_t *offset)
+{
+    const char msg[] = "Hello, User!\n";
+    const char *msg_off;
+    size_t msg_len;
+    unsigned long res;
+
+    if (*offset >= sizeof(msg)) {
+        *offset = 0;
+        return 0;
+    }
+
+    msg_off = msg + *offset;
+    msg_len = min(len, strlen(msg_off));
+
+    res = copy_to_user(buf, msg_off, msg_len);
+
+    *offset += (msg_len - res);
+
+    return msg_len - res;
+}
+
+static ssize_t hello_write(struct file *file, const char __user *buf,
+               size_t len, loff_t *off)
+{
+    pr_alert("unsupported operation\n");
+
+    return -EINVAL;
 }
 
 module_init(hello_init);
@@ -512,9 +606,7 @@ MODULE_DESCRIPTION("A kernel space hello world");
 MODULE_VERSION("0.1");
 ```
 
-The `hello.c` constitutes a tiny Kernel module that does nothing but
-log when it is loaded and unloaded. We can build it with `make` using
-the following Kbuild file.
+We can build the module with `make` using the following Kbuild file.
 
 ```bash
 # hello_mod/Kbuild
@@ -529,7 +621,7 @@ Now we should have a `hello.ko` module object in the source directory.
 
 ```bash
 $ modinfo hello_mod/hello.ko
-filename:       /home/aven/docs/projects/vms/kvm_dbg/hello_mod/hello.ko
+filename:       /home/aven/linux_kvm_debug/hello_mod/hello.ko
 version:        0.1
 description:    A kernel space hello world
 author:         Aven Bross <email@example.com>
@@ -572,12 +664,14 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 (vm) Welcome to sh!
 (vm) $ insmod home/hello.ko
 (vm) hello: loading out-of-tree module taints kernel.
-(vm) Hello, Kernel!
+(vm) created /dev/hello
 (vm) $ lsmod
 (vm) Module                  Size  Used by
 (vm) hello                  12288  0
+(vm) $ cat /dev/hello
+(vm) Hello, User!
 (vm) $ rmmod hello
-(vm) Bye, Kernel :(
+(vm) destroyed /dev/hello
 (vm) $ lsmod
 (vm) Module                  Size  Used by
 (vm) $ dmesg
@@ -591,12 +685,64 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 (vm) [    0.184383] HOME=/
 (vm) [    0.184384] TERM=linux
 (vm) [    0.184384] HOST=x86_64
-(vm) [    7.758562] hello: loading out-of-tree module taints kernel.
-(vm) [    7.760936] Hello, Kernel!
-(vm) [   65.639464] Bye, Kernel :(
+(vm) [   36.293897] hello: loading out-of-tree module taints kernel.
+(vm) [   36.298818] created /dev/hello
+(vm) [   65.639464] destroyed /dev/hello
 ```
 
-## Debugging a full Linux distribution
+To debug our module we will connect a `gdb` session in the same way as
+the previous section.
+Thanks to the kernel `gdb` scripts, we can set breakpoints
+in the `hello` module and have the associated debug symbols automatically
+loaded when the module is loaded.
+
+```bash
+$ gdb -q linux-6.17_build/vmlinux
+Reading symbols from linux-6.17_build/vmlinux...
+(gdb) target remote :1234
+Remote debugging using :1234
+0xffffffff815d77f3 in pv_native_safe_halt () at /home/aven/linux_kvm_debug/linux-6.17/arch/x86/kernel/paravirt.c:82
+82  }
+(gdb) lx-symbols
+loading vmlinux
+(gdb) b hello_read
+Function "hello_read" not defined.
+Make breakpoint pending on future shared library load? (y or [n]) y
+Breakpoint 1 (hello_read) pending.
+(gdb) c
+Continuing.
+```
+
+Back in the VM, we can now load the module.
+
+```bash
+(vm) $ insmod /home/hello.ko
+(vm) created /dev/hello
+```
+
+And watch as the symbols are loaded in `gdb`.
+
+```bash
+scanning for modules in /home/aven/linux_kvm_debug
+loading @0xffffffffa0000000: /home/aven/linux_kvm_debug/hello_mod/hello.ko
+```
+
+Finally, we can try reading from `/dev/hello`.
+
+```bash
+(vm) cat /dev/hello
+```
+
+And hit our breakpoint.
+
+```bash
+Breakpoint 1, hello_read (file=0xffff8880021c0500, buf=0x6b87c0 "$ in/toybox", len=4096, offset=0xffff88800293bf08)
+    at hello.c:77
+77      const char msg[] = "Hello, World!\n";
+(gdb) 
+```
+
+## Debugging in a full Linux distribution
 
 A basic `toybox` system will not always be a satisfactory test
 environment. For example, we may need to test how a variety of
@@ -950,7 +1096,7 @@ Finally, we can test that our breakpoint is working.
 ```bash
 (chroot) Breakpoint 1, zfsdev_ioctl (filp=0xffff88800739a900, cmd=23044, arg=140736606537392)
 (chroot)     at /root/zfs-2.4.0-rc2/module/os/linux/zfs/zfs_ioctl_os.c:132
-(chroot) 132	{
+(chroot) 132    {
 (chroot) (gdb) c
 (chroot) Continuing.
 ```
@@ -1032,3 +1178,4 @@ mounted as `/dev/nbdX` [network block devices][34] via [`qemu-nbd`][33].
 [54]: https://rsync.samba.org/
 [55]: https://www.qemu.org/
 [56]: https://lwn.net/Articles/569635/
+[57]: https://www.gnu.org/software/cpio/
