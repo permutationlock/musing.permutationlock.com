@@ -22,10 +22,10 @@ I will assume that we are working in a standard `bash`-like shell on a modern
 Linux system.
 
 We will first need to install the [Linux kernel build dependencies][35].
-More comprehensively, we will need [`binutils`][51], [`gcc`][52],
+More comprehensively, we will need [`binutils`][51], [`gcc`][52], [`make`][9],
 [`bc`][39], [`cpio`][57], [`flex`][41], [`bison`][42],
 [`tar`][43], [`xz`][44], [`gzip`][45], [`rsync`][54], [`perl`][53], and [`python`][48].
-We'll also need the tools, C headers, and libraries from [`elfutils`][38],
+We'll also need the command-line tools, headers, and libraries for [`elfutils`][38],
 [`gettext`][40], and [`openssl`][46].
 
 These should be available through a package manager on every Linux
@@ -156,7 +156,7 @@ for your host architecture.
 
 ## Creating an initial RAM filesystem
 
-The primary way to boot a Linux system is to use an inital RAM
+The primary way to boot a Linux system is to use an initial RAM
 filesystem (initramfs). An initramfs is simply a directory that
 has been packaged into a [`cpio`][19] archive (and optionally compressed).
 On boot the initramfs is mounted at `/` and then `/init` is executed
@@ -192,7 +192,7 @@ $ make -C linux-6.17/tools/include/nolibc O=$PWD/linux-6.17_build \
 >    headers_standalone
 ```
 
-By default, the Linux kernel will mount the inital RAM filesystem as `/`
+By default, the Linux kernel will mount the initial RAM filesystem as `/`
 and look for a `/init` executable to run as the first user-space
 process. We will write a basic `init.c` file and compile a statically linked
 `init` executable.
@@ -241,7 +241,7 @@ $ find . | cpio -o --format=newc > ../init_c.cpio
 $ cd ..
 ```
 
-With a kernel and an inital RAM filesystem containing an init executable, we can boot
+With a kernel and an initial RAM filesystem containing an init executable, we can boot
 an emulated system using `qemu`.
 
 ```bash
@@ -421,11 +421,11 @@ setsid -c /bin/sh <>/dev/ttyS0 >&0 2>&1
 reboot -f
 ```
 
-Our `init` script mounts the special [`/proc`][14],
+Our `init` script sets up the special [`/proc`][14],
 [`/sys`][15], [`/dev`][13], [`/dev/pts`][16], and [`/dev/shm`][17] Linux
-filesystems, sleeps for one second, prints a welcome message,
+directories, sleeps for one second, prints a welcome message,
 and starts a new session running `/bin/sh`. When
-the `/bin/sh` session exits, the system is rebooted.
+the shell session exits, the system is rebooted.
 
 The `setsid` line is confusing to parse if you aren't
 familiar with the arcane semantics of Unix shells, so lets break it
@@ -446,8 +446,8 @@ Taken together, the `setsid` line creates a new session
 with the same controlling `tty` as `init` that runs `/bin/sh` in its
 initial process with `/dev/ttyS0` open as input on
 file descriptor `0` and output on descriptors `1` and `2`. In other words,
-it just starts a shell session with the stdin, stdout,
-and stderr file descriptors!
+it starts a shell session with `stdin`, `stdout`,
+and `stderr` bound to `ttyS0`.
 
 **Note:** We
 specified the initial active `tty` to be `ttyS0` in our `qemu`
@@ -777,7 +777,7 @@ and install a custom Linux kernel.
 
 Then we boot a `qemu` virtual machine from the Alpine `.iso` image.
 The `-m` argument specifies the memory to allocate to the VM and `-smp`
-species the number of processor cores. The `-drive` argument specifies
+specifies the number of processor cores. The `-drive` argument specifies
 our new `hda.img` image to be the first hard disk provided to the VM. The
 `-cdrom` argument specifies the Alpine `.iso` file to be provided as a CD ROM
 device. The `-boot d` argument tells the VM to boot from the CD drive.
@@ -899,7 +899,7 @@ Finally, we need to  modify our bootloader configuration to
 add a default entry to boot from our new kernel and initramfs. The default
 bootloader for Alpine is [syslinux][24]. Below we use
 the `update-extlinux` utility, but the `/boot/extlinux.conf` file
-is fairly simple and may edited manually.
+is fairly simple and may be edited manually.
 
 However, the bootloader needs
 to know the disk device the system will be booting from, in our case
@@ -918,7 +918,7 @@ and update the `extlinux` bootloader config.
 
 ```bash
 (vm) $ echo "
-(vm) > default=1
+(vm) > default=0
 (vm) > " >> /etc/update-extlinux.conf
 (vm) $ update-extlinux
 ```
@@ -1103,7 +1103,7 @@ Finally, we can test that our breakpoint is working.
 
 We were able to set and hit a breakpoint inside the `zfs` module!
 
-## Further reading
+## Next steps
 
 The root source of information on debugging the Linux kernel is
 the [official documentation][37].
