@@ -48,18 +48,6 @@ int foo(
     int param7
 );
 
-int foo(
-    int param1,
-    int param2,
-    int param3,
-    int param4,
-    int param5,
-    int param6,
-    int param7
-) {
-    return param1 + param2 + param3 + param4 + param5 + param6 + param7;
-}
-
 int arr[] = {
     element1,
     element2,
@@ -93,6 +81,10 @@ if (condition_one || condition_two || condition_three || condition_four ||
     // body
 }
 ```
+
+**Note:** I still frequently use `clang-format` when contributing to external projects
+or writing code that heavily interfaces with an external project. E.g. when I write
+Linux kernel modules I use the `.clang-format` style from the Linux project.
 
 ## C is hard to parse
 
