@@ -1,5 +1,5 @@
 ---
-.title = "Linux Kernel Development",
+.title = "Linux Kernel Debugging",
 .date = @date("2025-10-20T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -11,9 +11,9 @@
 
 I have been a Linux user space programmer for well over ten years, but only
 recently dipped my toe into kernel development.
-In this article I'll go over the Linux kernel build system, kernel modules,
-basic initramfs system emulation,
-debugging code that runs in kernel space, and testing
+In this article I'll go over the Linux kernel build system,
+bare-bones initramfs system emulation,
+debugging code that runs in kernel space, kernel modules, and testing
 kernel code within a full Linux distribution.
 
 ## Requirements
@@ -261,7 +261,7 @@ Pressing the `Enter` key should kill the virtual machine.
 
 ## Debugging the Kernel with GDB
 
-In this section we will attach a `gdb` session to the kernel process
+In this section we will attach a `gdb` session to the kernel
 running in our `qemu` virtual machine. Our kernel was
 built with debug information enabled and [Kernel Address Space Layout Randomization
 (KASLR)][56] disabled, so there are only a few things left to do
@@ -292,8 +292,8 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s -S \
 >    -append "HOST=x86_64 console=ttyS0"
 ```
 
-The `-s` flag (short for `-gdb tcp::1234`) hosts a `gdb` server at address `:1234`
-attached to the kernel process. The `-S` flag halts the CPU so the
+The `-s` flag (short for `-gdb tcp::1234`) hosts a `gdb` server at address `:1234`.
+The `-S` flag halts the CPU so the
 kernel will not start booting before our `gdb` session can connect to the server.
 
 We can now connect a `gdb` session and begin debugging.
@@ -318,7 +318,7 @@ Breakpoint 1, start_kernel ()
 Above we open the uncompressed kernel binary `vmlinux` with `gdb`, connect to
 the `qemu` `gdbserver` target at address `:1234`, place a hardware
 breakpoint at `start_kernel`, and unpause the CPU until the breakpoint
-is hit. From here we can step through the kernel startup process as we we please.
+is hit. From here we can step through the kernel startup as we we please.
 
 However, we know that our `init` binary will eventually be run
 and issue a `write` system call. We can search the kernel for
