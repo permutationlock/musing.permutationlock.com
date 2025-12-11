@@ -46,8 +46,8 @@ can pull a local copy as shown below. If not, there are
 ```bash
 $ curl <release-url-for-your-arch-os> -o openjdk24.tar.gz
 $ tar -xvf openjdk24.tar.gz
-$ export JAVA_HOME=/path/to/jdk-24.0.2
-$ export PATH="/path/to/jdk-24.0.2/bin:$PATH"
+$ export JAVA_HOME="$PWD/jdk-24.0.2"
+$ export PATH="$PWD/jdk-24.0.2/bin:$PATH"
 ```
 
 We have to add the `jdk-24.0.2/bin` directory to our `PATH` because
@@ -91,7 +91,7 @@ All the files we need should now be installed.
 ```
 
 For brevity, and to accommodate different installations, from now on we will
-omit the full path and refer to each of the above by file name.
+omit the full path and refer to each of the above files by name.
 Optionally, we can add each relevant directory our `PATH`.
 
 #### A static alternative for Linux
