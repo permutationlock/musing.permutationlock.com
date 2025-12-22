@@ -123,7 +123,8 @@ Next, let's add a simple `Makefile` to build the executable.
 
 ```make
 CC = gcc
-CFLAGS = -fno-stack-protector
+CFLAGS = -ffreestanding -Wall -std=c99 -pedantic \
+        -fsanitize-trap -fsanitize=undefined -g -O0
 LD = ld
 LDFLAGS =
 AS = as
@@ -1211,9 +1212,9 @@ The `test_bit` helper function takes an array of bytes and a bit index,
 returning `1` if the given bit is set in the provided array, and
 `0` otherwise.
 
-Next we will write the `open_keyboards` function to acquire sole access to all
-available input devices that could be the user’s keyboard. We will use the
-`getdents` system call to iterate over all of the files in
+Next we will write an `open_keyboards` function to acquire sole access to all
+available input devices that could be the user’s keyboard. We will need the
+`getdents` and `openat` system calls to iterate over the files in
 `/dev/input`.
 
 ```c
@@ -1222,6 +1223,8 @@ available input devices that could be the user’s keyboard. We will use the
 enum syscall {
     /* ... */
     SYS_GETDENTS = 78,
+    /* ... */
+    SYS_OPENAT = 257,
     /* ... */
 };
 
@@ -1249,6 +1252,27 @@ static i64 getdents(i32 fd, struct dirent *dents, i64 dents_size) {
 }
 
 /* ... */
+
+static i32 openat(i32 dfd, char *fname, i32 mode, i32 flags) {
+    u64 return_value;
+    i32 error;
+    do {
+        return_value = syscall4(
+            SYS_OPENAT,
+            (u64)dfd,
+            (u64)fname,
+            (u64)mode,
+            (u64)flags
+        );
+        error = syscall_error(return_value);
+    } while (error == EINTR);
+    if (error != 0) {
+        return -error;
+    }
+    return (i32)return_value;
+}
+
+/* ... */
 ```
 
 The `getdents` system call writes a `struct dirent` object into the
@@ -1258,6 +1282,11 @@ entries have been read. A `struct dirent` object contains an
 [inode number](https://en.wikipedia.org/wiki/Inode),
 a filesystem specific offset value, the total size of the dirent object, and a null terminated string
 for the filename.
+
+The `openat` system call works in exactly the same way as `open`, but it searches for
+the path `fname` within the given directory. E.g. if we call
+`open("/etc", O_RDONLY, 0)` to get a file descriptor `dfd` for the `/etc` directory, then
+the call `openat(dfd, "f.txt", O_RDONLY, 0)` will open the file `/etc/f.txt`.
 
 ```c
 /* ... */
@@ -1274,12 +1303,6 @@ static i32 open_keyboards(
     }
 
     void *dents = alloc(&temp_arena, 1024);
-    char path_buffer[sizeof(input_dir) + 1024];
-    for (i32 i = 0; i < sizeof(input_dir); ++i) {
-        path_buffer[i] = input_dir[i];
-    }
-    path_buffer[sizeof(input_dir) - 1] = '/';
-    char *name_buffer = &path_buffer[sizeof(input_dir)];
 
     i64 dents_pos = 0;
     i64 dents_len = 0;
@@ -1293,13 +1316,9 @@ static i32 open_keyboards(
         }
 
         struct dirent *dent = (void *)((char *)dents + dents_pos);
-        i32 dent_name_len = dent->reclen - (dent->name - (char *)dent);
-        for (i32 i = 0; i < den_name_len; ++i) {
-            name_buffer[i] = dent->name[i];
-        }
         dents_pos += dent->reclen;
 
-        i32 keyboard_fd = open(path_buffer, O_RDONLY, 0);
+        i32 keyboard_fd = openat(input_dir_fd, dent->name, O_RDONLY, 0);
         if (keyboard_fd >= 0 & !is_keyboard(keyboard_fd)) {
             close(keyboard_fd);
             continue;
@@ -1346,8 +1365,8 @@ write zero or more `struct dirent` entries into the memory pointed to by
 size of each entry (`struct dirent` has a flexible array member) we can’t
 create a stack object with the correct type declared.
 The memory pointed to by the `void *` returned from `alloc` has no
-declared type and there are no writes visible to our translation unit.
-Thus we are free to read the memory via a `struct dirent` pointer.
+declared type and there are no writes visible to our translation unit,
+thus we are free to read the memory via a `struct dirent` pointer.
 
 Now that we have at least one keyboard, we can poll for key
 press events.
