@@ -260,8 +260,7 @@ syscall6:
 Now we can define a function stub for each syscall function. I like to refer
 to basic C types by short sign-and-size aliases, so we will also
 add a `typedef` statement for each relevant
-type. Finally, we'll need to define `memcpy` and
-`memset` as they may be required by the C compiler.
+type.
 
 ```c
 typedef short i16;
@@ -270,25 +269,6 @@ typedef int i32;
 typedef unsigned int u32;
 typedef long i64;
 typedef unsigned long u64;
-
-static void *memcpy(void *restrict dst, const void *restrict src, u64 len) {
-    const char *src_bytes = src;
-    char *dst_bytes = dst;
-    for (u64 i = 0; i < len; i += 1) {
-        dst_bytes[i] = src_bytes[i];
-    }
-
-    return dst;
-}
-
-static void *memset(void *mem, int val, u64 len) {
-    char *mem_bytes = mem;
-    for (u64 i = 0; i < len; i += 1) {
-        mem_bytes[i] = val;
-    }
-
-    return mem;
-}
 
 u64 syscall0(u64 scid);
 u64 syscall1(u64 scid, u64 a1);
