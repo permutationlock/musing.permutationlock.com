@@ -316,18 +316,11 @@ $ ./dumb_cycle
 
 Our executable now exits cleanly!
 
-## Greeting the world: error handling and file descriptors
+## Greeting the world: file descriptors
 
 Exiting cleanly is nice, but it would be even nicer to have some input and
-output. Before defining C functions
-to make the `write` system call, we will need to write a little
-boilerplate to manage error handling.
-
-The standard way for
-system calls to return error values is to place a value between `-4095`
-and `-1` in the return register. It is therefore necessary to test if the
-return value of a system call fits in this range and, if so, extract the error
-code.
+output. Below we define a C function
+to make the `write` system call.
 
 ```c
 /* ... */
@@ -337,38 +330,12 @@ enum syscall {
     SYS_EXIT = 60,
 };
 
-enum error_code {
-    EINTR = 4,
-};
-
-static i32 syscall_error(u64 return_value) {
-    if (return_value > -4096UL) {
-        return (i32)(-return_value);
-    }
-    return 0;
-}
-
 static i64 write(i32 fd, char *bytes, i64 bytes_len) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall3(SYS_WRITE, (u64)fd, (u64)bytes, (u64)bytes_len);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    if (error != 0) {
-        return -error;
-    }
-    return (i64)return_value;
+    return (i64)syscall3(SYS_WRITE, (u64)fd, (u64)bytes, (u64)bytes_len);;
 }
 
 /* ... */
 ```
-
-There is one particular syscall error that often needs special handling:
-`EINTR`. The `EINTR` error has code `4` on `x86_64` and indicates that
-the system
-call was interrupted by a signal. If we hit an `EINTR` error code we should
-retry the given syscall.
 
 Now we can write a classic greeting program. The first argument we
 need to pass to the `write` syscall is the file descriptor that
@@ -431,16 +398,7 @@ enum syscall {
 /* ... */
 
 static i64 read(i32 fd, char *bytes, i64 bytes_len) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall3(SYS_READ, (u64)fd, (u64)bytes, (u64)bytes_len);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    if (error != 0) {
-        return -error;
-    }
-    return (i64)return_value;
+    return (i64)syscall3(SYS_READ, (u64)fd, (u64)bytes, (u64)bytes_len);
 }
 
 /* ... */
@@ -452,26 +410,11 @@ enum open_mode {
 };
 
 static i32 open(char *fname, i32 mode, i32 flags) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall3(SYS_OPEN, (u64)fname, (u64)mode, (u64)flags);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    if (error != 0) {
-        return -error;
-    }
-    return (i32)return_value;
+    return (i32)syscall3(SYS_OPEN, (u64)fname, (u64)mode, (u64)flags);
 }
 
 static i32 close(i32 fd) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall1(SYS_CLOSE, (u64)fd);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    return error;
+    return (i32)syscall1(SYS_CLOSE, (u64)fd);
 }
 
 /* ... */
@@ -568,12 +511,11 @@ struct timespec {
 };
 
 static i32 clock_gettime(i32 clock_id, struct timespec *timespec) {
-    u64 return_value = syscall2(
+    return syscall2(
         SYS_CLOCK_GETTIME,
         (u64)clock_id,
         (u64)timespec
     );
-    return syscall_error(return_value);
 }
 
 static i64 time_since_ns(struct timespec *end, struct timespec *start) {
@@ -607,7 +549,7 @@ enum main_error {
 i32 main(i32 argc, char **argv) {
     struct timespec last, now;
     i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
-    if (error) {
+    if (error < 0) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
 
@@ -615,7 +557,7 @@ i32 main(i32 argc, char **argv) {
     i32 steps = 0;
     while (steps < 5) {
         i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
 
@@ -680,16 +622,7 @@ struct pollfd {
 };
 
 static i32 poll(struct pollfd *fds, i64 fds_len, i32 time_ms) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall3(SYS_POLL, (u64)fds, (u64)fds_len, (u64)time_ms);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    if (error != 0) {
-        return -error;
-    }
-    return (i32)return_value;
+    return (i32)syscall3(SYS_POLL, (u64)fds, (u64)fds_len, (u64)time_ms);
 }
 
 /* ... */
@@ -725,7 +658,7 @@ i32 main(i32 argc, char **argv) {
 
     struct timespec last, now;
     i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
-    if (error) {
+    if (error < 0) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
 
@@ -745,7 +678,7 @@ i32 main(i32 argc, char **argv) {
         }
 
         i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
 
@@ -798,6 +731,13 @@ enum syscall {
     /* ... */
 };
 
+static i32 syscall_error(u64 return_value) {
+    if (return_value > -4096UL) {
+        return (i32)(-return_value);
+    }
+    return 0;
+}
+
 /* ... */
 
 enum mmap_prot {
@@ -836,6 +776,16 @@ static void *mmap(
 
 /* ... */
 ```
+
+The standard way for
+system calls to return error values is to place an error code between `-4095`
+and `-1` in the return register. So far we've treated the result of each
+system call as a signed integer and any negative value was considered a failure.
+For `mmap` however, we are treating the return value as a pointer.
+It is therefore necessary to test if the
+return value fits in the error range and, if so, return a null pointer (in
+a full libc implementation the error code would be placed into the
+global `errno`).
 
 An `mmap` call asks the operating system to allocate contiguous blocks of
 virtual memory called pages. On Linux the page size
@@ -1060,13 +1010,7 @@ static i32 ioctl(i32 fd, u32 dir, u32 type, u32 number, u32 size, char *arg) {
     u32 dir_bits = (dir & 0x3) < 30;
     u32 request = dir_bits | size_bits | type_bits | number_bits;
 
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall3(SYS_IOCTL, (u64)fd, (u64)request, (u64)arg);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    return error;
+    return (i32)syscall3(SYS_IOCTL, (u64)fd, (u64)request, (u64)arg);
 }
 
 /* ... */
@@ -1147,7 +1091,7 @@ static i32 is_keyboard(i32 fd) {
         sizeof(evio_bits),
         evio_bits
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
     if (!test_bit(evio_bits, sizeof(evio_bits), EV_KEY)) {
@@ -1163,7 +1107,7 @@ static i32 is_keyboard(i32 fd) {
         sizeof(evio_key_bits),
         evio_key_bits
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
     if (
@@ -1218,38 +1162,24 @@ struct dirent {
 };
 
 static i64 getdents(i32 fd, struct dirent *dents, i64 dents_size) {
-    u64 return_value = syscall3(
+    return (i64)syscall3(
         SYS_GETDENTS,
         (u64)fd,
         (u64)dents,
         (u64)dents_size
     );
-    i32 error = syscall_error(return_value);
-    if (error != 0) {
-        return -error;
-    }
-    return (i64)return_value;
 }
 
 /* ... */
 
 static i32 openat(i32 dfd, char *fname, i32 mode, i32 flags) {
-    u64 return_value;
-    i32 error;
-    do {
-        return_value = syscall4(
-            SYS_OPENAT,
-            (u64)dfd,
-            (u64)fname,
-            (u64)mode,
-            (u64)flags
-        );
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-    if (error != 0) {
-        return -error;
-    }
-    return (i32)return_value;
+    return (i32)syscall4(
+        SYS_OPENAT,
+        (u64)dfd,
+        (u64)fname,
+        (u64)mode,
+        (u64)flags
+    );
 }
 
 /* ... */
@@ -1312,7 +1242,7 @@ static i32 open_keyboards(
             sizeof(u32),
             (char *)1
         );
-        if (error != 0) {
+        if (error < 0) {
             close(keyboard_fd);
             continue;
         }
@@ -1395,7 +1325,7 @@ i32 main(i32 argc, char **argv) {
 
     struct timespec last, now;
     i32 error = clock_gettime(CLOCK_MONOTONIC, &last);
-    if (error) {
+    if (error < 0) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
 
@@ -1451,7 +1381,7 @@ i32 main(i32 argc, char **argv) {
         }
 
         i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
 
@@ -1605,7 +1535,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
             sizeof(*res),
             (char *)res
         );
-        if (error != 0) {
+        if (error < 0) {
             return 0;
         }
 
@@ -1653,7 +1583,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
             sizeof(*res),
             (char *)res
         );
-        if (error != 0) {
+        if (error < 0) {
             return 0;
         }
     } while (
@@ -1808,7 +1738,7 @@ static struct drm_mode_connector *drm_mode_get_connector(
             sizeof(*conn),
             (char *)conn
         );
-        if (error != 0) {
+        if (error < 0) {
             return 0;
         }
 
@@ -1854,7 +1784,7 @@ static struct drm_mode_connector *drm_mode_get_connector(
             sizeof(*conn),
             (char *)conn
         );
-        if (error != 0) {
+        if (error < 0) {
             return 0;
         }
     } while (
@@ -1962,7 +1892,7 @@ static struct drm_mode_encoder *drm_mode_get_encoder(
         sizeof(*enc),
         (char *)enc
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
 
@@ -2076,7 +2006,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         sizeof(creq),
         (char *)&creq
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
 
@@ -2096,7 +2026,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         sizeof(fb_cmd),
         (char *)&fb_cmd
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
 
@@ -2109,7 +2039,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         sizeof(mreq),
         (char *)&mreq
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
 
@@ -2221,7 +2151,7 @@ static struct drm_mode_crtc *drm_mode_get_crtc(
         sizeof(*crtc),
         (char *)crtc
     );
-    if (error != 0) {
+    if (error < 0) {
         return 0;
     }
 
@@ -2281,7 +2211,7 @@ i32 main(i32 argc, char **argv) {
         1,
         buf->fb_id
     );
-    if (error != 0) {
+    if (error < 0) {
         return MAIN_ERROR_DRM_SET_CRTC;
     }
 
@@ -2299,13 +2229,13 @@ color values to the dumb buffer pixels.
 
 i32 main(i32 argc, char **argv) {
     /* ... */
-    if (error != 0) {
+    if (error < 0) {
         return MAIN_ERROR_DRM_SET_CRTC;
     }
 
     struct timespec last, now;
     error = clock_gettime(CLOCK_MONOTONIC, &last);
-    if (error) {
+    if (error < 0) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
 
@@ -2362,7 +2292,7 @@ i32 main(i32 argc, char **argv) {
         }
 
         i32 error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
 
@@ -2553,7 +2483,7 @@ i32 main(i32 argc, char **argv) {
         }
 
         error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error !=0) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
 
@@ -2819,7 +2749,7 @@ i32 main(i32 argc, char **argv) {
         1,
         bufs[buf_index]->fb_id
     );
-    if (error != 0) {
+    if (error < 0) {
         return MAIN_ERROR_DRM_SET_CRTC;
     }
     buf_index ^= 1;
@@ -2831,7 +2761,7 @@ i32 main(i32 argc, char **argv) {
         1,
         bufs[buf_index]->fb_id
     );
-    if (error != 0) {
+    if (error < 0) {
         return MAIN_ERROR_DRM_SET_CRTC;
     }
     buf_index ^= 1;
@@ -2841,7 +2771,7 @@ i32 main(i32 argc, char **argv) {
         crtc->crtc_id,
         bufs[buf_index]->fb_id
     );
-    if (error != 0) {
+    if (error < 0) {
         return MAIN_ERROR_DRM_PAGE_FLIP;
     }
     buf_index ^= 1;
@@ -2849,7 +2779,7 @@ i32 main(i32 argc, char **argv) {
     i64 elapsed = 0;
     struct timespec last, now;
     error = clock_gettime(CLOCK_MONOTONIC, &last);
-    if (error) {
+    if (error < 0) {
         return MAIN_ERROR_CLOCK_GETTIME;
     }
 
@@ -2885,7 +2815,7 @@ i32 main(i32 argc, char **argv) {
 
     while (1) {
         error = clock_gettime(CLOCK_MONOTONIC, &now);
-        if (error !=0) {
+        if (error < 0) {
             return MAIN_ERROR_CLOCK_GETTIME;
         }
         elapsed += time_since_ns(&now, &last);
@@ -2977,7 +2907,7 @@ i32 main(i32 argc, char **argv) {
                     crtc->crtc_id,
                     bufs[buf_index]->fb_id
                 );
-                if (error != 0) {
+                if (error < 0) {
                     return MAIN_ERROR_DRM_PAGE_FLIP;
                 }
                 buf_index ^= 1;
