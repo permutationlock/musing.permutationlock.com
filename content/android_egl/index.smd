@@ -1431,6 +1431,131 @@ $ clang --target=x86_64-linux-android22 \
 The devices I own are all `aarch64`, but I've tested
 other architectures with [emulators][30].
 
+## Debugging native code with `lldb`
+
+Attaching a debugger to an app is not a particularly well
+docmented process, but it is possible. The trick is to get an
+`lldb-server` running with sufficient permissions to both debug
+the running app's process and listen on a tcp port. Then we can
+simply use `adb` to forward the tcp port to our host machine
+and connect to the server with `lldb`.
+
+Android uses [SELinux][64] and each app is run by a corresponding
+user with only the necessary permissions. For `lldb-server`
+to debug `seglapp.apk` it must run under the same `org.seglorg.seglapp`
+user. But for that user to be able to listen on a tcp port,
+the `seglapp.apk` must request permissions to access the network.
+
+```xml
+<!-- template/AndroidManifest.xml -->
+
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.seglorg.seglapp">
+  <uses-sdk android:minSdkVersion="22"
+      android:targetSdkVersion="35" />
+  <uses-permission android:name="android.permission.SET_RELEASE_APP"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+  <!-- ... -->
+</manifest>
+```
+
+Then we'll need to build
+our code with debug symbols and re-package `seglapp.apk`.
+
+```bash
+$ adb uninstall org.seglorg.seglapp
+$ rm temp.apk temp2.apk seglapp.apk
+$ aapt package -v -f  -F ./temp.apk -I android.jar \
+    -M ./template/AndroidManifest.xml \
+    -S ./template/res --target-sdk-version 35
+$ unzip -o temp.apk -d ./build
+$ clang --target=aarch64-linux-android22 \
+    -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC -g -o ./build/lib/arm64-v8a/libmain.so \
+    ./src/main.c ./src/android_native_app_glue.c \
+    -lm -landroid -llog -lEGL -lGLESv2
+$ cd ./build
+$ zip -D4r ../temp2.apk .
+$ zip -D0r ../temp2.apk ./resources.arsc ./AndroidManifest.xml
+$ cd ..
+$ zipalign -v 4 ./temp2.apk ./seglapp.apk
+$ keytool -genkey -v -keystore mykey.keystore -alias mykey \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -storepass mypassword -keypass mypassword \
+    -dname "CN=example.com, OU=ID, O=Example, L=Callar, S=Morvern, C=GB"
+$ apksigner sign --key-pass pass:mypassword \
+    --ks-pass pass:mypassword \
+    --ks mykey.keystore \
+    ./seglapp.apk
+$ adb install seglapp.apk
+```
+
+Next we must transfer an `lldb-server` binary
+to our device. If you followed the official `sdkmanager` instructions above
+to install your NDK,
+then the host `lldb` and device `lldb-server` executables
+can be found at the paths shown below. The `lldb.sh` script
+sets up the `$PYTHONHOME` and `$LD_LIBRARY_PATH` environment variables
+such that the NDK's `lldb` will work even if the
+correct `python` is not installed.
+
+```
+./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb
+./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb.sh
+./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/lib/clang/18/lib/linux/aarch64/lldb-server
+```
+
+Moving over the `lldb-server` executable is a two step process: we first push the
+binary to the device, then copy it to the root of the `org.seglorg.seglapp` user.
+
+```bash
+$ adb push lldb-server /data/local/tmp/
+$ adb shell run-as org.seglorg.seglapp \
+    cp /data/local/tmp/lldb-server .
+```
+
+Finally, we can host an `lldb-server`.
+
+```bash
+$ adb forward tcp:5039 tcp:5039
+$ adb shell run-as org.seglorg.seglapp \
+    ./lldb-server platform --listen '*:5039' --server
+```
+
+In a separate terminal, we can now run our app and attach a debugger.
+
+```bash
+$ adb shell am start -a android.intent.action.MAIN -n org.seglorg.seglapp/android.app.NativeActivity
+$ adb shell ps -e | grep "org.seglorg.seglapp"
+u0_a341       9470   946   16835372  87588 0                   0 S org.seglorg.seglapp
+$ lldb.sh
+(lldb) platform select remote-android
+(lldb) platform connect connect://:5039
+(lldb) process attach --pid 9470
+...
+Architecture set to: aarch64-unknown-linux-android.
+(lldb) b main.c:649
+(lldb) c
+Process 9470 stopped
+* thread #14, name = 'seglorg.seglapp', stop reason = breakpoint 1.1
+    frame #0: 0x00000073f21690d4 libmain.so`android_main(app=0xb40000742a33f590) at main.c:649:16
+   646           struct timespec now;
+   647           clock_gettime(CLOCK_MONOTONIC, &now);
+   648           state.elapsed += time_since(now, last);
+-> 649           last = now;
+                        ^
+   650
+   651           while (state.elapsed >= PERIOD) {
+   652               state.elapsed -= PERIOD;
+(lldb)
+```
+
+We have access to source level debugging for our app code that
+is running on the device!
+
 ## Next steps
 
 Our OpenGL example was very disappointing, we didn't even draw a triangle!
@@ -1527,3 +1652,4 @@ See [GitHub][9] for a full version of the example project.
 [61]: https://youtu.be/-JQWrNUDud8?si=1__PbK6FpJ2nBoTt
 [62]: https://github.com/mackron/miniaudio
 [63]: https://android.googlesource.com/platform/bionic/+/466dbe4/libc/include/sys/system_properties.h#47
+[64]: https://en.wikipedia.org/wiki/Security-Enhanced_Linux
