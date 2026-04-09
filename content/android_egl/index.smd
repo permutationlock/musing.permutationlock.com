@@ -37,20 +37,21 @@ possible to follow along from PowerShell (I've done it myself).
 
 ### OpenJDK
 
-We will need [OpenJDK][14] for `java` and `keytool`. Preferably,
+We will need [OpenJDK][14] for `java` and `keytool` (Android uses Java 17
+at the date of this article). Preferably,
 we can install OpenJDK through our system package manager. Otherwise,
 if a [distribution is available][27] for our CPU architecture and OS, then we
 can pull a local copy as shown below. If not, there are
 [instructions][28] to build the JDK from [source][32].
 
 ```bash
-$ curl <release-url-for-your-arch-os> -o openjdk24.tar.gz
-$ tar -xvf openjdk24.tar.gz
-$ export JAVA_HOME="$PWD/jdk-24.0.2"
-$ export PATH="$PWD/jdk-24.0.2/bin:$PATH"
+$ curl <release-url-for-your-arch-os> -o openjdk17.tar.gz
+$ tar -xvf openjdk17.tar.gz
+$ export JAVA_HOME="$PWD/jdk-17.0.2"
+$ export PATH="$PWD/jdk-17.0.2/bin:$PATH"
 ```
 
-We have to add the `jdk-24.0.2/bin` directory to our `PATH` because
+We have to add the `jdk-17.0.2/bin` directory to our `PATH` because
 the Android SDK `apksigner` script expects a `java` command.
 
 ### Android tools
@@ -72,11 +73,13 @@ platforms, and platform-tools, as well as the [NDK][16].
 $ curl <release-url-for-your-arch-os> -o cmdline-tools.zip
 $ mkdir android_sdk
 $ unzip cmdline-tools.zip -d ./android_sdk/
-$ ./android_sdk/cmdline-tools/bin/sdkmanager --sdk-root ./android_sdk \
+$ mkdir android_sdk/cmdline-tools/latest
+$ mv ./android_sdk/cmdline-tools/* ./android_sdk/cmdline-tools/latest/
+$ ./android_sdk/cmdline-tools/latest/bin/sdkmanager \
     "build-tools;35.0.1" \
     "platforms;android-35" \
     "platform-tools" \
-    "ndk;29.0.13599879"
+    "ndk;27.3.13750724"
 ```
 
 All the files we need should now be installed.
@@ -87,7 +90,7 @@ All the files we need should now be installed.
 ./android_sdk/build-tools/35.0.1/zipalign
 ./android_sdk/platform-tools/adb
 ./android_sdk/platforms/android-35/android.jar
-./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/clang
+./android_sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/<os>-<arch>/bin/clang
 ```
 
 For brevity, and to accommodate different installations, from now on we will
@@ -1503,18 +1506,18 @@ such that the NDK's `lldb` will work even if the
 correct `python` is not installed.
 
 ```
-./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb
-./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb.sh
-./android_sdk/ndk/29.0.13599879/toolchains/llvm/prebuilt/<os>-<arch>/lib/clang/18/lib/linux/aarch64/lldb-server
+./android_sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb
+./android_sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/<os>-<arch>/bin/lldb.sh
+./android_sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/<os>-<arch>/lib/clang/18/lib/linux/aarch64/lldb-server
 ```
 
 Moving over the `lldb-server` executable is a two step process: we first push the
 binary to the device, then copy it to the root of the `org.seglorg.seglapp` user.
 
 ```bash
-$ adb push lldb-server /data/local/tmp/
+$ adb push lldb-server /tmp/
 $ adb shell run-as org.seglorg.seglapp \
-    cp /data/local/tmp/lldb-server .
+    cp /tmp/lldb-server .
 ```
 
 Finally, we can host an `lldb-server`.
@@ -1528,7 +1531,7 @@ $ adb shell run-as org.seglorg.seglapp \
 In a separate terminal, we can now run our app and attach a debugger.
 
 ```bash
-$ adb shell am start -a android.intent.action.MAIN -n org.seglorg.seglapp/android.app.NativeActivity
+$ adb shell am start -n org.seglorg.seglapp/android.app.NativeActivity
 $ adb shell ps -e | grep "org.seglorg.seglapp"
 u0_a341       9470   946   16835372  87588 0                   0 S org.seglorg.seglapp
 $ lldb.sh
@@ -1615,7 +1618,7 @@ See [GitHub][9] for a full version of the example project.
 [24]: https://android.googlesource.com/platform/
 [25]: https://android.googlesource.com/platform/prebuilts/fullsdk/platforms/+/refs/heads/main/
 [26]: https://developer.android.com/tools/sdkmanager
-[27]: https://jdk.java.net/24/
+[27]: https://jdk.java.net/archive/
 [28]: https://github.com/openjdk/jdk/blob/master/doc/building.md
 [29]: https://developer.android.com/guide/topics/manifest/manifest-intro
 [30]: https://developer.android.com/studio/run/emulator-commandline
@@ -1625,21 +1628,21 @@ See [GitHub][9] for a full version of the example project.
 [34]: https://developer.android.com/reference/android/app/NativeActivity
 [35]: https://registry.khronos.org/EGL/sdk/docs/man/html/eglGetProcAddress.xhtml
 [36]: https://en.wikipedia.org/wiki/Java_virtual_machine
-[37]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#findclass
-[38]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getmethodid
-[39]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstaticmethodid
-[40]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getfieldid
-[41]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstaticfieldid
-[42]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines
-[43]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines
-[44]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#gettypefield-routines
-[45]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#getstatictypefield-routines
+[37]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#findclass
+[38]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getmethodid
+[39]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstaticmethodid
+[40]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getfieldid
+[41]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstaticfieldid
+[42]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines
+[43]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines
+[44]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines
+[45]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines
 [46]: https://developer.android.com/develop/ui/views/layout/immersive#java
-[47]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/design.html#global-and-local-references
-[48]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#deletelocalref
+[47]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/design.html#global-and-local-references
+[48]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#deletelocalref
 [49]: https://developer.android.com/ndk/reference/group/asset
 [50]: https://developer.android.com/training/articles/perf-jni#local-and-global-references
-[51]: https://docs.oracle.com/en/java/javase/24/docs/specs/jni/functions.html#ensurelocalcapacity
+[51]: https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#ensurelocalcapacity
 [52]: https://github.com/cnlohr/rawdrawandroid/blob/master/Makefile
 [53]: https://developer.android.com/guide/components/activities/activity-lifecycle#alc
 [54]: https://developer.android.com/ndk/reference/struct/a-native-activity#internaldatapath
