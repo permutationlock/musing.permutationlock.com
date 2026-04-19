@@ -1,0 +1,317 @@
+---
+.title = "Writing Portable C",
+.date = @date("2026-04-09T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = false,
+---
+
+I like to write C that is portable to build
+as well as run. To that end, all of my projects should build
+with any C toolchain (compiler `cc`, linker `ld`, and archiver `ar`)
+that supports a standard for C99, C11 or C23. They have no other development
+dependencies: no need for `pkgconfig`, or the presence of headers or libraries
+beyond those standard from `libc` (on Unix systems a few of
+the standard Unix headers not in the C standard are used).
+
+I test my projects
+with [`gcc`][2], [`clang`][3], [`tcc`][4], [`cproc`][1], and
+[`cl.exe`][6]---and most will even build with [`chibicc`][5] (a toy compiler
+that has some issues).
+In this article I go over the methods I use.
+
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Compiler specific builtins](#builtins)
+ 2. [Graphics and other libraries](#gfx)
+ 3. [Math](#math)
+
+## [Compiler specific builtins]($section.id('builtins'))
+
+If you want to take advantage of compiler builtins, check they are available.
+E.g. the following code uses an assert macro based on
+`__builtin_unreachable` from `gcc`/`clang` so long as it is available.
+
+```c
+#ifndef __has_builtin
+    #define __has_builtin(unused) 0
+#endif
+
+#if !defined(assert) and __has_builtin(__builtin_unreachable)
+    #define assert(c) ((!(c)) ? __builtin_unreachable() : (void)0)
+#else
+    #include <assert.h>
+#endif
+```
+
+The same trick can be used for GNU attribute specifiers.
+
+```c
+#ifndef __has_attribute
+    #define __has_attribute(unused) 0
+#endif
+
+#if __has_attribute(malloc)
+    __attribute__((malloc))
+#endif
+#if __has_attribute(alloc_size)
+    __attribute__((alloc_size(2, 4)))
+#endif
+#if __has_attribute(alloc_align)
+    __attribute__((alloc_align(3)))
+#endif
+void *aven_arena_alloc(
+    AvenArena *arena,
+    size_t count,
+    size_t align,
+    size_t size
+);
+```
+
+## [Graphics and other libraries]($section.id('gfx'))
+
+I avoid dynamic dependencies wherever possible, but sometimes there is
+no getting around them. E.g. in order to access GPU functionality, it is difficult
+to avoid `libvulkan` or `libGL`. To avoid requiring that the development
+version of each library be installed on each build machine,
+we can provide the headers with our source and dynamically load
+the libraries at runtime.
+
+The [`glfw`][7] library is a classic dynamic loader for X11, wayland,
+and OpenGL. Another example is the [`volk`][8] dynamic loader for Vulkan.
+
+I use my own OpenGL loader that works with a common subset of
+OpenGL 4.3, OpenGL ES 3.2, and WebGL 2.0.
+
+```c
+#include <aven.h>
+
+#define GL_GLES_PROTOTYPES 0
+#include <GLES3/gl32.h>
+
+typedef struct {
+    PFNGLACTIVETEXTUREPROC ActiveTexture;
+    PFNGLATTACHSHADERPROC AttachShader;
+    // ...
+    PFNGLDEBUGMESSAGECALLBACKPROC DebugMessageCallback;
+    bool es;
+} AvenGl;
+
+typedef void (*AvenGlProcFn)(void);
+typedef AvenGlProcFn (*AvenGlLoadProcFn)(const char *);
+
+static inline AvenGl aven_gl_load(AvenGlLoadProcFn load, bool es) {
+    AvenGl gl = { .es = es };
+
+    gl.ActiveTexture = (PFNGLACTIVETEXTUREPROC)load("glActiveTexture");
+    gl.AttachShader = (PFNGLATTACHSHADERPROC)load("glAttachShader");
+    // ...
+    gl.DebugMessageCallback = (PFNGLDEBUGMESSAGECALLBACKPROC)load(
+        "glDebugMessageCallback"
+    );
+
+    return gl;
+}
+
+#ifdef AVEN_GL_NDEBUG
+    #define aven_gl_check_error(gl) (void)(gl)
+#else
+    #define aven_gl_check_error(gl) do { \
+            if ((gl)->GetError() != 0) { \
+                aven_panic("opengl error"); \
+            } \
+        } while (0)
+#endif
+
+#define aven_gl_shader(gl, str) ( \
+        gl->es ? "#version 300 es\n" str : "#version 430\n" str \
+    )
+
+static inline void aven_gl_ActiveTexture(AvenGl *gl, GLenum texture) {
+    gl->ActiveTexture(texture);
+    aven_gl_check_error(gl);
+}
+
+static inline void aven_gl_AttachShader(
+    AvenGl *gl,
+    GLuint program,
+    GLuint shader
+) {
+    gl->AttachShader(program, shader);
+    aven_gl_check_error(gl);
+}
+
+// ...
+
+static inline void aven_gl_DebugMessageCallback(
+    AvenGl *gl,
+    GLDEBUGPROC callback,
+    const void *userParam
+) {
+    gl->DebugMessageCallback(callback, userParam);
+    aven_gl_check_error(gl);
+}
+```
+
+## [Math]($section.id('math'))
+
+I use my own tiny SIMD linear algebra library, in lieu of
+something like [CGLM][9]. Below is an excerpt of the code for 2D
+computations.
+
+```c
+#if ( \
+        __has_attribute(vector_size) and \
+        __has_attribute(aligned) and \
+        __has_builtin(__builtin_shuffle) \
+    )
+    #define AVEN_MATH_SIMD
+
+    typedef float Vec2SIMD __attribute__((vector_size(8)));
+    typedef float Vec4SIMD __attribute__((vector_size(16)));
+    typedef int32_t IVec2SIMD __attribute__((vector_size(8)));
+    typedef int32_t IVec4SIMD __attribute__((vector_size(16)));
+    typedef float Vec2[2] __attribute__((aligned(8)));
+    typedef Vec2 Mat2[2] __attribute__((aligned(16)));
+#else
+    typedef float Vec2[2];
+    typedef Vec2 Mat2[2];
+#endif
+
+static inline void vec2_copy(Vec2 dst, Vec2 a) {
+#ifdef AVEN_AVEN_MATH_SIMD
+    *(Vec2SIMD *)dst = *(Vec2SIMD *)a;
+#else
+    dst[0] = a[0];
+    dst[1] = a[1];
+#endif
+}
+
+static inline void vec2_scale(Vec2 dst, float s, Vec2 a) {
+#ifdef AVEN_AVEN_MATH_SIMD
+    *(Vec2SIMD *)dst = *(Vec2SIMD *)a * s;
+#else
+    dst[0] = a[0] * s;
+    dst[1] = a[1] * s;
+#endif
+}
+
+static inline void vec2_add(Vec2 dst, Vec2 a, Vec2 b) {
+#ifdef AVEN_AVEN_MATH_SIMD
+    *(Vec2SIMD *)dst = *(Vec2SIMD *)a + *(Vec2SIMD *)b;
+#else
+    dst[0] = a[0] + b[0];
+    dst[1] = a[1] + b[1];
+#endif
+}
+
+static inline void vec2_sub(Vec2 dst, Vec2 a, Vec2 b) {
+#ifdef AVEN_AVEN_MATH_SIMD
+    *(Vec2SIMD *)dst = *(Vec2SIMD *)a - *(Vec2SIMD *)b;
+#else
+    dst[0] = a[0] - b[0];
+    dst[1] = a[1] - b[1];
+#endif
+}
+
+static inline void vec2_mul(Vec2 dst, Vec2 a, Vec2 b) {
+#ifdef AVEN_AVEN_MATH_SIMD
+    *(Vec2SIMD *)dst = (*(Vec2SIMD *)a) * (*(Vec2SIMD *)b);
+#else
+    dst[0] = a[0] * b[0];
+    dst[1] = a[1] * b[1];
+#endif
+}
+
+static inline float vec2_dot(Vec2 a, Vec2 b) {
+    Vec2 ab;
+    vec2_mul(ab, a, b);
+    return ab[0] + ab[1];
+}
+
+static inline void mat2_copy(Mat2 dst, Mat2 m) {
+#ifdef AVEN_MATH_SIMD
+    *(Vec4SIMD *)dst = *(Vec4SIMD *)m;
+#else
+    dst[0][0] = m[0][0];
+    dst[0][1] = m[0][1];
+    dst[1][0] = m[1][0];
+    dst[1][1] = m[1][1];
+#endif
+}
+
+static inline void mat2_identity(Mat2 m) {
+    Mat2 ident = { { 1.0f, 0.0f }, { 0.0f, 1.0f } };
+    mat2_copy(m, ident);
+}
+
+static inline void mat2_scale(Mat2 dst, float s, Mat2 m) {
+#ifdef AVEN_MATH_SIMD
+    *(Vec4SIMD *)dst = *(Vec4SIMD *)m * s;
+#else
+    dst[0][0] = m[0][0] * s;
+    dst[0][1] = m[0][1] * s;
+    dst[1][0] = m[1][0] * s;
+    dst[1][1] = m[1][1] * s;
+#endif
+}
+
+static inline void mat2_add(Mat2 dst, Mat2 m, Mat2 n) {
+#ifdef AVEN_MATH_SIMD
+    *(Vec4SIMD *)dst = *(Vec4SIMD *)m + *(Vec4SIMD *)n;
+#else
+    dst[0][0] = m[0][0] + n[0][0];
+    dst[0][1] = m[0][1] + n[0][1];
+    dst[1][0] = m[1][0] + n[1][0];
+    dst[1][1] = m[1][1] + n[1][1];
+#endif
+}
+
+static inline void mat2_mul_vec2(Vec2 dst, Mat2 m, Vec2 a) {
+#ifdef AVEN_MATH_SIMD
+    Vec4SIMD vm = *(Vec4SIMD *)m;
+    Vec4SIMD va = { a[0], a[0], a[1], a[1] };
+    Vec4SIMD vma = vm * va;
+    Vec2SIMD vma_low = { vma[0], vma[1] };
+    Vec2SIMD vma_high = { vma[2], vma[3] };
+    *(Vec2SIMD *)dst = vma_low + vma_high;
+#else
+    Vec2 ta;
+    vec2_copy(ta, a);
+    dst[0] = m[0][0] * ta[0] + m[1][0] * ta[1];
+    dst[1] = m[0][1] * ta[0] + m[1][1] * ta[1];
+#endif
+}
+
+static inline void mat2_mul_mat2(Mat2 dst, Mat2 m, Mat2 n) {
+#ifdef AVEN_MATH_SIMD
+    Vec4SIMD vm = *(Vec4SIMD *)m;
+    Vec4SIMD vn = *(Vec4SIMD *)n;
+
+    Vec4SIMD vm0_ = __builtin_shuffle(vm, (IVec4SIMD){ 0, 1, 0, 1 });
+    Vec4SIMD vm1_ = __builtin_shuffle(vm, (IVec4SIMD){ 2, 3, 2, 3 });
+    Vec4SIMD vn_0 = __builtin_shuffle(vn, (IVec4SIMD){ 0, 0, 2, 2 });
+    Vec4SIMD vn_1 = __builtin_shuffle(vn, (IVec4SIMD){ 1, 1, 3, 3 });
+    *(Vec4SIMD *)dst = vm0_ * vn_0 + vm1_ * vn_1;
+#else
+    Mat2 tn;
+    mat2_copy(tn, n);
+    Mat2 tm;
+    mat2_copy(tm, m);
+    dst[0][0] = tm[0][0] * tn[0][0] + tm[1][0] * tn[0][1];
+    dst[0][1] = tm[0][1] * tn[0][0] + tm[1][1] * tn[0][1];
+    dst[1][0] = tm[0][0] * tn[1][0] + tm[1][0] * tn[1][1];
+    dst[1][1] = tm[0][1] * tn[1][0] + tm[1][1] * tn[1][1];
+#endif
+}
+```
+
+[1]: https://sr.ht/~mcf/cproc/
+[2]: https://gcc.gnu.org/
+[3]: https://clang.llvm.org/
+[4]: https://www.bellard.org/tcc/
+[5]: https://github.com/rui314/chibicc
+[6]: https://learn.microsoft.com/en-us/cpp/
+[7]: https://www.glfw.org/
+[8]: https://github.com/zeux/volk
+[9]: https://github.com/recp/cglm
