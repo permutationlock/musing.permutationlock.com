@@ -13,7 +13,17 @@ This article covers my
 experience writing [`aven-cfmt`][8], a simple zero-dependency
 C parser and renderer.
 
-## Motivation
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Motivation](#motivation)
+ 2. [C is hard](#hard)
+ 3. [Coding style](#style)
+ 4. [Tokenization](#tokenization)
+ 5. [Parsing](#parsing)
+ 6. [Preprocessor](#preproc)
+ 7. [Rendering](#rendering)
+
+## [Motivation]($section.id('motivation'))
 
 When it comes to C source code formatting, there are three big tools
 available: [clang-format][3], [astyle][4], and [indent][5]. Unfortunately for
@@ -86,7 +96,7 @@ if (condition_one || condition_two || condition_three || condition_four ||
 or writing code that heavily interfaces with an external project. E.g. when I write
 Linux kernel modules I use the `.clang-format` style from the Linux project.
 
-## C is hard to parse
+## [C is hard]($section.id('hard'))
 
 The main reason I love C is that it's a very simple language.
 One of the C11 compilers I use is written in under 10k lines of C99 code.
@@ -172,7 +182,7 @@ int bar(int n) {
 }
 ```
 
-## Coding style
+## [Coding style]($section.id('style'))
 
 This section is intended to serve as a crash
 course on how to read the `aven-cfmt` source code.
@@ -240,7 +250,7 @@ void foo(AvenArena *arena, size_t n) {
 }
 ```
 
-## Tokenization
+## [Tokenization]($section.id('tokenization'))
 
 For tokenization I simply followed the lexical grammar in
 the C11 standard. My only modification being that I used the
@@ -860,7 +870,7 @@ Benchmark 2 (1749 runs): ./aven-ctokenize-goto ../raylib/src/rcore.c
   branch_misses      71.6K  ± 1.09K     68.9K  … 78.3K          97 ( 6%)        -  9.1% ±  0.3%
 ```
 
-## Parsing
+## [Parsing]($section.id('parsing'))
 
 I had written several recursive descent parsers in university, as
 well as a Prolog interpreter using `flex` and `bison`, but that was
@@ -2466,7 +2476,7 @@ was constructed from the right hand side of a preprocessor directive.
 For example, the `##` operator is only allowed when
 parsing an identifier in preprocessor mode.
 
-## Parsing and tokenizing preprocessor code
+## [Preprocessor]($section.id('preproc'))
 
 Above I mentioned that each preprocessor directive
 line will be tokenized into a separate slice. To accomplish this, the main
@@ -2543,7 +2553,7 @@ primary translation unit AST. The primary AST and each
 preprocessor AST are stored in the same `nodes` and `data` lists, but form
 disjoint trees.
 
-## Rendering
+## [Rendering]($section.id('rendering'))
 
 The renderer is essentially a recursive descent parser in reverse. Its context stores
 a `writer` (an interface to push data to a sink, e.g. a file or memory buffer) and a

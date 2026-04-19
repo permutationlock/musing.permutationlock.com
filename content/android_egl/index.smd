@@ -27,7 +27,20 @@ In this article we'll walk through the steps required to acquire the SDK
 build tools, write a minimal OpenGL app in C, and package a `.apk` file
 to install on an Android device.
 
-## Requirements
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Requirements](#requirements)
+ 2. [Packaging an Android APK](#apk)
+ 3. [Building a native Android library with C](#lib)
+ 4. [Drawing graphics with EGL and OpenGL](#egl)
+ 5. [Persistent files and the Android activity lifecycle](#persist)
+ 6. [Fullscreen mode and the Java API](#java)
+ 7. [Read-only asset files](#assets)
+ 8. [Targeting multiple architectures](#multiarch)
+ 9. [Debugging native code with `lldb`](#lldb)
+ 10. [Next steps](#next)
+
+## [Requirements]($section.id('requirements'))
 
 I will assume that we are working in a shell on a
 Unix/POSIX-like operating system (e.g. `bash` on Linux). The
@@ -118,7 +131,7 @@ I have not tried to build the tools myself yet, but the
 [sdk-custom][3] and [ndk-custom][4]
 projects mentioned above look like a useful resource.
 
-## Packaging an Android APK
+## [Packaging an Android APK]($section.id('apk'))
 
 An Android `.apk` file is just a specially structured `.zip` archive.
 The core ingredients are an `AndroidManifest.xml` file,
@@ -222,7 +235,7 @@ Archive:  ./temp.apk
  extracting: ./build/resources.arsc
 ```
 
-## Building a native Android library with C
+## [Building a native Android library with C]($section.id('lib'))
 
 The C bindings for the Java [`NativeActivity`][34] that we specified
 in our `AndroidManifest.xml` are provided by
@@ -397,7 +410,7 @@ $ adb shell logcat SEGL:I *:S
 messages under the tag `"threaded_app"`. We can add the filter
 `threaded_app:V` to take a look.
 
-## Drawing graphics with EGL and OpenGL
+## [Drawing graphics with EGL and OpenGL]($section.id('egl'))
 
 There are two basic directions our build could take to access the
 [EGL][12] and [OpenGL ES 2.0][13] C APIs: link against the `libEGL.so` and
@@ -719,7 +732,7 @@ $ adb install seglapp.apk
 The app should now display a varying
 background color and continue to run while minimized.
 
-## Persistent files and the Android activity lifecycle
+## [Persistent files and the Android activity lifecycle]($section.id('persist'))
 
 The `APP_CMD_RESUME`/`APP_CMD_PAUSE` events are sent as soon as an
 app enters/leaves the foreground. Once an app has left the foreground,
@@ -1001,7 +1014,7 @@ to this new pause and resume behavior. To run in the background
 and still avoid losing progress, the app could save its state to disk
 periodically and load the last state at the start of `android_main`.
 
-## Fullscreen mode and the Java API
+## [Fullscreen mode and the Java API]($section.id('java'))
 
 You may have noticed that our OpenGL colored background is drawn behind the
 default Android UI decorations. The NDK does not provide a C API to hide these decorations,
@@ -1348,7 +1361,7 @@ variable lifetimes, so references will exist
 [until the thread is detached][50]. The [`DeleteLocalReference`][48] function
 should be used to destroy references when they are no longer needed.
 
-## Read-only asset files
+## [Read-only asset files]($section.id('assets'))
 
 If our app needs to provide static assets, and we don't want to embed
 them in the shared library itself, we can add an `assets/` directory
@@ -1402,7 +1415,7 @@ $ echo "lana" > build/assets/name.txt
 # then proceed with re-building .so and re-packaging .apk
 ```
 
-## Targeting multiple architectures
+## [Targeting multiple architectures]($section.id('multiarch'))
 
 The `seglapp.apk` packaged above will only work on 64 bit ARM devices.
 Fortunately, the process to package a `.apk` for multiple architectures
@@ -1434,7 +1447,7 @@ $ clang --target=x86_64-linux-android22 \
 The devices I own are all `aarch64`, but I've tested
 other architectures with [emulators][30].
 
-## Debugging native code with `lldb`
+## [Debugging native code with `lldb`]($section.id('lldb'))
 
 Attaching a debugger to an app is not a particularly well
 docmented process, but it is possible. The trick is to get an
@@ -1559,7 +1572,7 @@ Process 9470 stopped
 We have access to source level debugging for our app code that
 is running on the device!
 
-## Next steps
+## [Next steps]($section.id('next'))
 
 Our OpenGL example was very disappointing, we didn't even draw a triangle!
 Adding a basic shader pipeline and pushing some vertices to the GPU

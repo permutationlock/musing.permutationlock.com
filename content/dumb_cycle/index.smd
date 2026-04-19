@@ -34,7 +34,24 @@ That was undoubtedly a bit stupid, but I refer you to the project title.
 
 Code for the finished game is available on [GitHub][3].
 
-## Requirements
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Requirements](#requirements)
+ 2. [Creating an executable: an entry point in assembly](#entry)
+ 3. [Exiting without crashing: Linux system calls](#syscalls)
+ 4. [Greeting the world: file descriptors](#files)
+ 5. [Accessing the filesystem](#fs)
+ 6. [Keeping time: the `clock_gettime` system call](#time)
+ 7. [Detecting user input: the `poll` syscall](#poll)
+ 8. [Making memory: pages and arenas](#memory)
+ 9. [Interacting with I/O devices: the `ioctl` system call](#ioctl)
+ 10. [Keyboard input: finding and reading keyboard devices](#keyboard)
+ 11. [Testing graphics: a basic Linux virtual machine](#vm)
+ 12. [The long road to pixels: connectors, encoders, and CRTCs](#drm)
+ 13. [Gaming at last: drawing the game state](#game)
+ 14. [Avoiding partial updates: vsync and double buffering](#vsync)
+
+## [Requirements]($section.id('requirements'))
                         
 To build the game you will need a C compiler that
 supports at least the C99 standard, e.g.
@@ -63,7 +80,7 @@ machine, e.g.
 [musl-cross-make](https://github.com/richfelker/musl-cross-make)</a> and
 [QEMU](https://www.qemu.org/). 
 
-## Creating an executable: an entry point in assembly
+## [Creating an executable: an entry point in assembly]($section.id('entry'))
 
 To link a basic
 [ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format)
@@ -158,7 +175,7 @@ $ ./dumb_cycle
 Illegal instruction (core dumped)
 ```
 
-## Exiting without crashing: Linux system calls
+## [Exiting without crashing: Linux system calls]($section.id('syscalls'))
 
 In order to exit from our process without crashing we need to invoke the
 Linux `exit` system
@@ -316,7 +333,7 @@ $ ./dumb_cycle
 
 Our executable now exits cleanly!
 
-## Greeting the world: file descriptors
+## [Greeting the world: file descriptors]($section.id('files'))
 
 Exiting cleanly is nice, but it would be even nicer to have some input and
 output. Below we define a C function
@@ -379,7 +396,7 @@ $ make
 $ ./dumb_cycle
 Hello, World!
 ```
-## Accessing the filesystem
+## [Accessing the filesystem]($section.id('fs'))
 
 Almost everything in Linux is treated as a file, and thus we will need
 some system calls to access the file system: `read`, `open` and `close`.
@@ -485,7 +502,7 @@ $ ./dumb_cycle
 Hello Aven
 ```
 
-## Keeping time: the `clock_gettime` system call
+## [Keeping time: the `clock_gettime` system call]($section.id('time'))
 
 To manage game updates and draw frames we will need some method to track how
 much time has passed. The standard Linux system call for tracking time in
@@ -591,7 +608,7 @@ $ ./dumb_cycle
 .....
 ```
 
-## Detecting user input: the `poll` syscall
+## [Detecting user input: the `poll` syscall]($section.id('poll'))
 
 In order to run a game loop we will need to be able to read user input while
 updating the game state and rendering the screen. To accomplish this we will
@@ -709,7 +726,7 @@ Enter a message to exit.
 ....Hey!
 ```
 
-## Making memory: pages and arenas
+## [Making memory: pages and arenas]($section.id('memory'))
 
 It is often necessary to allocate memory during runtime, such as when it
 isn’t known at compile time how much space a block of data will take up.
@@ -980,7 +997,7 @@ By defining `alloc` in a separate translation
 unit we force the compiler to consider each call to `alloc`
 as returning a pointer to unknown memory with no declared type.
 
-## Interacting with I/O devices: the `ioctl` system call
+## [Interacting with I/O devices: the `ioctl` system call]($section.id('ioctl'))
 
 Our game will need to receive keyboard input and draw pixels to the
 screen. Both of these tasks will require the `ioctl` system call, short for
@@ -1031,7 +1048,7 @@ using C macros in this project, and we are aiming for
 clarity over performance, it makes more sense for us to pass each part of the
 request separately and then pack the request in the `ioctl` function.
 					
-## Keyboard input: finding and reading keyboard devices
+## [Keyboard input: finding and reading keyboard devices]($section.id('keyboard'))
 
 Reading from the standard input works for text lines, but for realtime key
 presses we really need direct access to the keyboard device.
@@ -1406,7 +1423,7 @@ key. Note that this program needs to have permissions to open and acquire
 keyboard devices from `/dev/input`, so non-root users will likely need to
 run with `sudo ./dumb_cycle`.
 					
-## Testing graphics: a basic Linux virtual machine
+## [Testing graphics: a basic Linux virtual machine]($section.id('vm'))
 
 The DumbCycle game will run directly on the Linux Direct Rendering
 Manager (DRM) driver and take over an entire screen along with the system
@@ -1456,7 +1473,7 @@ test: dumb_cycle vm
 		-no-reboot
 ```
 
-## The long road to pixels: connectors, encoders, and CRTCs
+## [The long road to pixels: connectors, encoders, and CRTCs]($section.id('drm'))
 
 With a runtime entry point, file input and output, memory allocation, `ioctl`
 requests, keyboard input, and a virtual machine test environment, we are
@@ -2315,7 +2332,7 @@ i32 main(i32 argc, char **argv) {
 The program should fill the screen with a color that slowly changes from
 black to blue and exits when the user presses `ESC`.
 
-## Gaming at last: drawing the game state
+## [Gaming at last: drawing the game state]($section.id('game'))
 
 We are going to create a game that loosely resembles Snake or the LightCycle
 game from Tron. The player will constantly be
@@ -2506,7 +2523,7 @@ i32 main(i32 argc, char **argv) {
 
 Enjoy DumbCycling!
 
-## Avoiding partial updates: vsync and double buffering
+## [Avoiding partial updates: vsync and double buffering]($section.id('vsync'))
 
 While playing the game, you may have noticed some
 flickering at the head of the trail and occasional jumps
