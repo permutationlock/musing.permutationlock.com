@@ -1,0 +1,39 @@
+---
+.title = "Aliasing, arenas, and sanitizers",
+.date = @date("2025-12-11T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = true,
+.custom = {},
+---
+
+In this article I discuss how memory arenas interact with
+strict type aliasing in C, and how to use the `clang` type sanitizer
+to check compliance.
+
+## Requirements
+
+We will need GNU libc based Linux system with the `clang` C compiler. If
+you are running a non-GNU system, e.g. one using musl libc, then you can
+simply install `clang` within a GNU `chroot` container.
+
+## Strict aliasing in C
+
+According to the C standard, it is never valid to read memory
+through a pointer of type `T *ptr` if the type of the *object*
+is not compatible with `T` (unless `T` is a character type, e.g.
+`char`). Here an *object* refers to either a variable with
+a declared type (e.g. for `int x;`, the object at `&x`
+in memory has type `int`), or a location in untyped memory (e.g. memory returned
+by `malloc`) where a value has
+been written (e.g. `int *x = malloc(sizeof(int));` `*x=1;` gives the object
+at `x` in memory type `int`).
+
+Some projects prefer to ignore strict aliasing and
+disable any associated optimizations in their compiler (e.g. pass
+`-fno-strict-aliasing` to `gcc` or `clang`). I personally abide
+by strict aliasing because I find it simple to do so; if I ever need to
+memory [type pun][1] incompatible types, then I use a `union`.
+
+[1]: https://en.wikipedia.org/wiki/Type_punning
+[2]: 
