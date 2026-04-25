@@ -1,0 +1,35 @@
+---
+.title = "Running Software in a chroot",
+.date = @date("2025-12-11T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = true,
+.custom = {},
+---
+
+In this article I cover how `chroot` can be
+used to run `glibc` software on a `musl`-based system, modify
+another Linux system without booting it, and create minimal environments for
+development demonstrations.
+
+## Requirements
+
+All we will need is a Linux system with the basic Unix/Posix utilities. The section
+on graphical applications assumes that your system is running a [Wayland][1] compositor (I
+used [Sway][2]).
+
+## Setting up a root directory
+
+The `chroot` utility runs a command with the given directory set as the root `/`
+directory of the filesystem. There are many use cases for such a tool, e.g.
+to sandbox an application so that it cannot mess with files outside of its purview.
+
+This article will not dwell on security concerns; we will assume that the
+software we are running is not adversiarial. If secure sandboxing is your primary
+interest, then further measures beyond `chroot` are necessary
+to set up a true *container*, e.g.
+[namespaces][3] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
+manages all these aspects together.
+
+[1]: https://wayland.freedesktop.org/
+[2]: https://swaywm.org/

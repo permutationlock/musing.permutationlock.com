@@ -16,7 +16,19 @@ bare-bones initramfs system emulation,
 debugging code that runs in kernel space, kernel modules, and testing
 kernel code within a full Linux distribution.
 
-## Requirements
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Requirements](#requirements)
+ 2. [Building the Linux kernel](#building_linux)
+ 3. [Creating an initial RAM filesystem](#initramfs)
+ 4. [Debugging the Kernel with GDB](#gdb)
+ 5. [Adding a shell to our initramfs with `toybox`](#shell)
+ 6. [Building and debugging kernel modules](#modules)
+ 7. [Debugging in a full Linux distribution](#distro)
+ 8. [Building and debugging OpenZFS](#zfs)
+ 9. [Next steps](#next)
+
+## [Requirements]($section.id('requirements'))
 
 I will assume that we are working in a standard `bash`-like shell on a modern
 Linux system.
@@ -45,7 +57,7 @@ physical hardware. E.g. if our host system is running on an
 Finally, we will need the GNU debugger [`gdb`][7] to debug kernel and user
 space code.
 
-## Building the Linux kernel
+## [Building the Linux kernel]($section.id('building_linux'))
 
 The Linux kernel uses a `make`-based build system called `Kbuild` and
 a custom `Kconfig` configuration system. For now
@@ -154,7 +166,7 @@ The compiled kernel image will be located in
 the process should be the same but with `x86`/`x86_64` swapped
 for your host architecture.
 
-## Creating an initial RAM filesystem
+## [Creating an initial RAM filesystem]($section.id('initramfs'))
 
 The primary way to boot a Linux system is to use an initial RAM
 filesystem (initramfs). An initramfs is simply a directory that
@@ -259,7 +271,7 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot \
 You should see a string of kernel boot messages, followed by `Hello, World!`.
 Pressing the `Enter` key should kill the virtual machine.
 
-## Debugging the Kernel with GDB
+## [Debugging the Kernel with GDB]($section.id('gdb'))
 
 In this section we will attach a `gdb` session to the kernel
 running in our `qemu` virtual machine. Our kernel was
@@ -352,7 +364,7 @@ Breakpoint 2, __do_sys_write (fd=1, buf=0x7ffde9ee7c51 "Hello, World!\n", count=
 We interrupted the kernel side of the `"Hello, World!"` write system call
 from our `init` process!
 
-## Adding a shell to our initramfs with `toybox`
+## [Adding a shell to our initramfs with `toybox`]($section.id('shell'))
 
 Our current initramfs contains a single `init` binary we compiled using
 `nolibc`. While such single binary systems can be useful for testing
@@ -479,7 +491,7 @@ $ qemu-system-x86_64 --enable-kvm -nographic -no-reboot -s \
 (vm) $ 
 ```
 
-## Building and debugging kernel modules
+## [Building and debugging kernel modules]($section.id('modules'))
 
 The Linux kernel allows code to be dynamically loaded at runtime through
 modules. In that sense, modules are a loose kernel space equivalent
@@ -742,7 +754,7 @@ Breakpoint 1, hello_read (file=0xffff8880021c0500, buf=0x6b87c0 "$ in/toybox", l
 (gdb) 
 ```
 
-## Debugging in a full Linux distribution
+## [Debugging in a full Linux distribution]($section.id('distro'))
 
 A basic `toybox` system will not always be a satisfactory test
 environment. For example, we may need to test how a variety of
@@ -1003,7 +1015,7 @@ kernel modules in a `chroot`, and debug the kernel space code by attaching
 Note that we also have `gdb` available within the VM itself, so it is possible
 to simultaneously debug user space code that is interacting with the kernel.
 
-## Building and debugging OpenZFS
+## [Building and debugging OpenZFS]($section.id('zfs'))
 
 In this section we'll build a debug version of the ZFS filesystem kernel modules
 and user space tools, and debug them in our Alpine VM.
@@ -1103,7 +1115,7 @@ Finally, we can test that our breakpoint is working.
 
 We were able to set and hit a breakpoint inside the `zfs` module!
 
-## Next steps
+## [Next steps]($section.id('next'))
 
 The root source of information on debugging the Linux kernel is
 the [official documentation][37].
