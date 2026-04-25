@@ -10,7 +10,7 @@
 ---
 
 This article covers my
-experience writing [`aven-cfmt`][8], a simple zero-dependency
+experience writing [`aven-cfmt`][8], a zero-dependency
 C parser and renderer.
 
 ## Motivation
