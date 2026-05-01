@@ -8,38 +8,177 @@
 
 I like to write C that is portable to build
 as well as run. To that end, all of my projects should build
-with any C toolchain (compiler `cc`, linker `ld`, and archiver `ar`)
-that supports a standard for C99, C11 or C23. They have no other development
+with any C compiler `cc`
+that supports the C99, C11 or C23 standard. They have no other development
 dependencies: no need for `pkgconfig`, or the presence of headers or libraries
-beyond those standard from `libc` (on Unix systems a few of
-the standard Unix headers not in the C standard are used).
+beyond those that come included with a minimal version of the target operating system
+(e.g. `libc` on Unix).
 
-I test my projects
+I test all projects
 with [`gcc`][2], [`clang`][3], [`tcc`][4], [`cproc`][1], and
-[`cl.exe`][6]---and most will even build with [`chibicc`][5] (a toy compiler
-that has some issues).
-In this article I go over the methods I use.
+[`cl.exe`][6]---and most will even build with [`chibicc`][5].
 
 ## [Table of Contents]($section.id('toc'))
 
 1. [Code](#code)
-    1. [Compiler specific builtins](#builtins)
-    2. [Graphics and other libraries](#gfx)
-    3. [Math](#math)
+    1. [Project structure](#project)
+    2. [Compiler specific builtins](#builtins)
+    3. [Graphics and other libraries](#gfx)
 2. [Compilers](#compilers)
     1. [`tcc`](#tcc)
     2. [`cproc`](#cproc)
     3. [`chibicc`](#chibicc)
 3. [Conclusion](#conclusion)
+    1. [Easy targets](#targets)
 
 ## [The Code]($section.id('code'))
 
-There are a few simple rules that I follow to ensure maximum portability, but the
-main one is to stick to the C standard as much as possible. Beyond that,
-I try to minimize translation units and library dependencies---almost all
-code should be statically linked and built from source provided by the
-project. For external dependencies, I vendor the source code and
-package it to compile with my build system.
+There are two main rules I follow to ensure portability:
+
+ 1. statically linked dependencies should be built from source and vendored with the project,
+    using as few translation units (`*.o` files) as possible;
+ 2. dynamic dependencies should be avoided at all costs, and when required they
+    must be dynamically loaded into vtables via `dlopen` and `dlsym`.
+
+The first rule requires that, besides a C toolchain, everything required to build a
+project must be included with the source code: no build system should
+be necessary!
+
+If external dynamic dependencies are necessary,
+e.g. graphics libraries (`libGL`, `libvulkan`),
+then the second rule requires these to be runtime-only dependencies---not build dependencies.
+The purpose of this rule is to ensure easy cross-compilation: a minimal sysroot should
+be all that is required. Userspace libraries that are part of
+a minimally configured target OS are not considered
+"dependencies" as they must be present in any viable sysroot;
+e.g. `nt.dll` *is* the OS API on Windows, `libc.so` *is* (part of) the OS API on FreeBSD.
+
+### [`aven-cfmt` project structure]($section.id('project'))
+
+The [`aven-cfmt`][17] project builds
+a single `aven-cfmt` executable and exports some
+functionality in `include/aven/c.h`. The `aven-cfmt` executable
+is a C source code formatter that parses and renders C abstract syntax
+trees. The `c.h` header contains the implementation of the
+core functionality (tokenization, parsing, rendering, etc) separate from
+the application code (command line parsing, IO, etc),
+to make it easier for other projects to use.
+
+```
+aven-cfmt/
+    src/
+        aven-cfmt.c
+    test/
+        test.c
+    include/
+        aven/
+            c.h
+    deps/
+        libaven/
+            include/
+                aven/
+```
+
+In order to build the project, you would execute the following.
+
+```bash
+cc -I include -I deps/libaven/include -o aven-cfmt src/aven-cfmt.c
+```
+
+To build and run the tests, you would instead compile `test/test.c`.
+
+```bash
+cc -I include -I deps/libaven/include -o test src/test.c
+./test
+```
+
+Even when I provide other build systems, I will *always*
+structure the project
+such that it builds with a single
+`cc` command that follows the above pattern.
+
+### [`libavengraph` project structure]($section.id('libavengraph'))
+
+The [`libavengraph`][18] project implements several graph algorithms,
+focusing on topologically embedded graphs and coloring algorithms for
+embedded graphs. The `include/` directory contains the
+library code, the `visualization/` directory contains application code
+for algorithm visualizations, the `benchmarks/` directory
+contains application code for algorithm benchmarks.
+
+```
+libavengraph/
+    visualization/
+        visualization.c
+    benchmarks/
+        all.c
+        pyramid.c
+    include/
+        graph.h
+        graph/
+    deps/
+        libavengl/
+        include/
+        deps/
+            libaven/
+                include/
+            glfw/
+                include/
+                src/
+                glfw.c
+            stb/
+                include/
+                stb.c
+            gles3/
+                include/
+            wayland/
+                include/
+            X11/
+                include/
+            xkbcommon/
+                include/
+```
+
+The `visualization/`
+code depends on my [`libavengl`][21] library, which in turn depends on
+[`glfw`][19] and [`stb_truetype`][20], as well as the headers for
+`gles3`, `X11`, `wayland`, and `xkbcommon`. To build
+the `visualization` binary you would run a command along
+the lines of the following.
+
+```bash
+cc -I include -I deps/libavengl/include \
+    -I deps/libavengl/deps/libaven/include \
+    -I deps/libavengl/deps/glfw/include \
+    -I deps/libavengl/deps/stb/include \
+    -I deps/libavengl/deps/gles3/include \
+    -I deps/libavengl/deps/wayland/include \
+    -I deps/libavengl/deps/X11/include \
+    -I deps/libavengl/deps/xkbcommon/include \
+    -o visualization visualization/visualization.c \
+    deps/libavengl/deps/glfw/glfw.c \
+    deps/libavengl/deps/glfw/stb.c
+```
+
+The benchmarks do not require the graphical dependencies and thus may be
+built with fewer flags.
+
+```bash
+cc -O3 -march=native -I include -I deps/libavengl/deps/libaven/include \
+    -o all_benchmarks benchmarks/all.c
+```
+
+Of course, I also provide simple build system written in C.
+
+```bash
+$ cc -o build build.c
+$ ./build
+$ ls build_out
+visualization
+```
+
+But this is only for convenience, the project structure dictates how the code
+is built!
 
 ### [Compiler specific builtins]($section.id('builtins'))
 
@@ -85,17 +224,18 @@ void *aven_arena_alloc(
 
 ### [Graphics and other libraries]($section.id('gfx'))
 
-I avoid dynamic dependencies wherever possible, but sometimes there is
+As mentioned above, I avoid dynamic dependencies wherever possible, but sometimes there is
 no getting around them. E.g. in order to access GPU functionality, it is difficult
 to avoid `libvulkan` or `libGL`. To avoid requiring that the development
 version of each library be installed on each build machine,
 we can provide the headers with our source and dynamically load
 the libraries at runtime.
 
-The [`glfw`][7] library is a classic dynamic loader for X11, wayland,
-and OpenGL. Another example is the [`volk`][8] dynamic loader for Vulkan.
+The [`glfw`][7] library is a classic wrapper and dynamic loader for windowing
+libraries like X11 and/or waylaid.
+Another example is the [`volk`][8] dynamic loader for Vulkan.
 
-I use my own OpenGL loader that works with a common subset of
+My [OpenGL loader][21] works with a common subset of
 OpenGL 4.3, OpenGL ES 3.2, and WebGL 2.0.
 
 ```c
@@ -168,186 +308,33 @@ static inline void aven_gl_DebugMessageCallback(
 }
 ```
 
-### [Math]($section.id('math'))
-
-I use my own tiny SIMD linear algebra library, in lieu of
-something like [CGLM][9]. Below is an excerpt of the code for 2D
-computations.
-
-```c
-#if ( \
-        __has_attribute(vector_size) and \
-        __has_attribute(aligned) and \
-        __has_builtin(__builtin_shuffle) \
-    )
-    #define AVEN_MATH_SIMD
-
-    typedef float Vec2SIMD __attribute__((vector_size(8)));
-    typedef float Vec4SIMD __attribute__((vector_size(16)));
-    typedef int32_t IVec2SIMD __attribute__((vector_size(8)));
-    typedef int32_t IVec4SIMD __attribute__((vector_size(16)));
-    typedef float Vec2[2] __attribute__((aligned(8)));
-    typedef Vec2 Mat2[2] __attribute__((aligned(16)));
-#else
-    typedef float Vec2[2];
-    typedef Vec2 Mat2[2];
-#endif
-
-static inline void vec2_copy(Vec2 dst, Vec2 a) {
-#ifdef AVEN_AVEN_MATH_SIMD
-    *(Vec2SIMD *)dst = *(Vec2SIMD *)a;
-#else
-    dst[0] = a[0];
-    dst[1] = a[1];
-#endif
-}
-
-static inline void vec2_scale(Vec2 dst, float s, Vec2 a) {
-#ifdef AVEN_AVEN_MATH_SIMD
-    *(Vec2SIMD *)dst = *(Vec2SIMD *)a * s;
-#else
-    dst[0] = a[0] * s;
-    dst[1] = a[1] * s;
-#endif
-}
-
-static inline void vec2_add(Vec2 dst, Vec2 a, Vec2 b) {
-#ifdef AVEN_AVEN_MATH_SIMD
-    *(Vec2SIMD *)dst = *(Vec2SIMD *)a + *(Vec2SIMD *)b;
-#else
-    dst[0] = a[0] + b[0];
-    dst[1] = a[1] + b[1];
-#endif
-}
-
-static inline void vec2_sub(Vec2 dst, Vec2 a, Vec2 b) {
-#ifdef AVEN_AVEN_MATH_SIMD
-    *(Vec2SIMD *)dst = *(Vec2SIMD *)a - *(Vec2SIMD *)b;
-#else
-    dst[0] = a[0] - b[0];
-    dst[1] = a[1] - b[1];
-#endif
-}
-
-static inline void vec2_mul(Vec2 dst, Vec2 a, Vec2 b) {
-#ifdef AVEN_AVEN_MATH_SIMD
-    *(Vec2SIMD *)dst = (*(Vec2SIMD *)a) * (*(Vec2SIMD *)b);
-#else
-    dst[0] = a[0] * b[0];
-    dst[1] = a[1] * b[1];
-#endif
-}
-
-static inline float vec2_dot(Vec2 a, Vec2 b) {
-    Vec2 ab;
-    vec2_mul(ab, a, b);
-    return ab[0] + ab[1];
-}
-
-static inline void mat2_copy(Mat2 dst, Mat2 m) {
-#ifdef AVEN_MATH_SIMD
-    *(Vec4SIMD *)dst = *(Vec4SIMD *)m;
-#else
-    dst[0][0] = m[0][0];
-    dst[0][1] = m[0][1];
-    dst[1][0] = m[1][0];
-    dst[1][1] = m[1][1];
-#endif
-}
-
-static inline void mat2_identity(Mat2 m) {
-    Mat2 ident = { { 1.0f, 0.0f }, { 0.0f, 1.0f } };
-    mat2_copy(m, ident);
-}
-
-static inline void mat2_scale(Mat2 dst, float s, Mat2 m) {
-#ifdef AVEN_MATH_SIMD
-    *(Vec4SIMD *)dst = *(Vec4SIMD *)m * s;
-#else
-    dst[0][0] = m[0][0] * s;
-    dst[0][1] = m[0][1] * s;
-    dst[1][0] = m[1][0] * s;
-    dst[1][1] = m[1][1] * s;
-#endif
-}
-
-static inline void mat2_add(Mat2 dst, Mat2 m, Mat2 n) {
-#ifdef AVEN_MATH_SIMD
-    *(Vec4SIMD *)dst = *(Vec4SIMD *)m + *(Vec4SIMD *)n;
-#else
-    dst[0][0] = m[0][0] + n[0][0];
-    dst[0][1] = m[0][1] + n[0][1];
-    dst[1][0] = m[1][0] + n[1][0];
-    dst[1][1] = m[1][1] + n[1][1];
-#endif
-}
-
-static inline void mat2_mul_vec2(Vec2 dst, Mat2 m, Vec2 a) {
-#ifdef AVEN_MATH_SIMD
-    Vec4SIMD vm = *(Vec4SIMD *)m;
-    Vec4SIMD va = { a[0], a[0], a[1], a[1] };
-    Vec4SIMD vma = vm * va;
-    Vec2SIMD vma_low = { vma[0], vma[1] };
-    Vec2SIMD vma_high = { vma[2], vma[3] };
-    *(Vec2SIMD *)dst = vma_low + vma_high;
-#else
-    Vec2 ta;
-    vec2_copy(ta, a);
-    dst[0] = m[0][0] * ta[0] + m[1][0] * ta[1];
-    dst[1] = m[0][1] * ta[0] + m[1][1] * ta[1];
-#endif
-}
-
-static inline void mat2_mul_mat2(Mat2 dst, Mat2 m, Mat2 n) {
-#ifdef AVEN_MATH_SIMD
-    Vec4SIMD vm = *(Vec4SIMD *)m;
-    Vec4SIMD vn = *(Vec4SIMD *)n;
-
-    Vec4SIMD vm0_ = __builtin_shuffle(vm, (IVec4SIMD){ 0, 1, 0, 1 });
-    Vec4SIMD vm1_ = __builtin_shuffle(vm, (IVec4SIMD){ 2, 3, 2, 3 });
-    Vec4SIMD vn_0 = __builtin_shuffle(vn, (IVec4SIMD){ 0, 0, 2, 2 });
-    Vec4SIMD vn_1 = __builtin_shuffle(vn, (IVec4SIMD){ 1, 1, 3, 3 });
-    *(Vec4SIMD *)dst = vm0_ * vn_0 + vm1_ * vn_1;
-#else
-    Mat2 tn;
-    mat2_copy(tn, n);
-    Mat2 tm;
-    mat2_copy(tm, m);
-    dst[0][0] = tm[0][0] * tn[0][0] + tm[1][0] * tn[0][1];
-    dst[0][1] = tm[0][1] * tn[0][0] + tm[1][1] * tn[0][1];
-    dst[1][0] = tm[0][0] * tn[1][0] + tm[1][0] * tn[1][1];
-    dst[1][1] = tm[0][1] * tn[1][0] + tm[1][1] * tn[1][1];
-#endif
-}
-```
-
 ## [Compilers]($section.id('compilers'))
 
 A good way to test whether your project is written in a portable manner
 is to build it with as many C compilers as you can get your hands on. The
 standard toolchains are:
- - Linux/BSDs: `gcc`, `clang`
- - Windows GNU: `gcc.exe`, `clang.exe`
- - Windows MSVC: `cl.exe`, `clang.exe`
- - MacOS: `clang`
+ - Linux/BSDs: [`gcc`][2], [`clang`][3]
+ - Windows GNU: [`gcc.exe`][15], [`clang.exe`][3]
+ - Windows MSVC: [`cl.exe`][6], [`clang.exe`][3]
+ - MacOS: [`clang`][2]
 
 In general, it is quite simple to cross-compile
 applications between Linux, the BSDs, and Windows using `clang` or
 `zig cc` (the version of `clang` packaged with the
 [Zig][12] programming language). It is also fairly simple to test
 Windows apps from Unix via [`wine`][13], and to test
-Linux/BSD apps from any system by using a `qemu` virtual machine.
+Linux/BSD apps from any system by using a [`qemu`][14] virtual machine.
 That leaves MacOS as the one major outlier---fuck Apple.
 
-### [The `tcc` compiler]($section.id('tcc'))
+### [`tcc`]($section.id('tcc'))
 
 The Tiny C Compiler (`tcc`) is probably the most well known
-C compiler outside of the mainstream (`gcc`, `clang`, `cl.exe`).
-It's a fanatastic, fast compiler, but it doesn't do much opmization
+C compiler outside of the mainstream.
+It's a fantastic, fast compiler, but it doesn't do much optimization
 when it comes to code generation. It can generate position independent
 code and work with dynamic libraries.
 
-### [The `cproc` compiler]($section.id('cproc'))
+### [`cproc`]($section.id('cproc'))
 
 One of my favorite open source tools is [`cproc`][1]: a C compiler
 built on the [`qbe`][10] optimizing code generation backend. Each of `cproc`
@@ -362,12 +349,12 @@ uses those from the system C toolchain (e.g. `gcc -E`, `ar`, and `ld`).
 It also cannot generate position independent code, and therefore cannot
 compile shared libraries.
 
-## [The `chibicc` compiler]($section.id('chibicc'))
+### [`chibicc`]($section.id('chibicc'))
 
 The Chibi C Compiler (`chibicc`) is an educational, toy compiler
 that includes a full preprocessor implementation. In order to use
 `chibicc` as a drop-in replacement for `gcc` in my projects,
-I had to fix a few issues with the following patch:
+I had to apply the following patch:
 
 ```
 diff --git a/main.c b/main.c
@@ -473,15 +460,24 @@ index 6acaeb8..80a86b7 100644
    }
 ```
 
+The escaped string printing fixes an issue that when used with
+`-E`, the output will omit all but the first
+token of a compound string literal; e.g.
+`"hi " "there"` would be preprocessed as `"hi "`.
+
 ## [Conclusion]($section.id('conclusion'))
 
-If a project will build with each of these compilers for each  mutually supported target,
-then that is a pretty good sign of something that is lasting and portable. Every
-application and library I write supports
+If your project will build with a single evocation of each of the above
+compilers targeting each of the mutually supported operating systems and architectures,
+that is a pretty good sign that you have crafted something lasting and portable.
+
+### [Easy targets]($section.id('targets'))
+
+Every application and library I write supports
 Linux, the BSDs, and Windows; I will only
 support MacOS for command-line tools: I don't have Mac machine to test with,
-and it is the pain in the ass it is to create a full cross-compilation toolchain.
-For graphical applications, I additionally support using `emcc` to
+and it is a pain in the ass to create a full cross-compilation toolchain.
+For graphical applications, I additionally support using [`emcc`][16] to
 target the browser with WebAssembly and WebGL 2, and I have a simple
 [Android build process](/android_egl/) to package Android APKs.
 
@@ -498,3 +494,11 @@ target the browser with WebAssembly and WebGL 2, and I have a simple
 [11]: https://www.gnu.org/software/make/
 [12]: https://ziglang.org/
 [13]: https://www.winehq.org/
+[14]: https://www.qemu.org/
+[15]: https://www.mingw-w64.org/
+[16]: https://emscripten.org/
+[17]: https://github.com/permutationlock/aven-cfmt
+[18]: https://github.com/permutationlock/libavengraph
+[19]: https://www.glfw.org
+[20]: https://github.com/nothings/stb/blob/master/stb_truetype.h
+[21]: https://github.com/permutationlock/libavengl
