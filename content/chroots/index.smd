@@ -1,38 +1,193 @@
 ---
 .title = "Running Software in a chroot",
-.date = @date("2025-12-11T00:00:00"),
+.date = @date("2026-05-19T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
-.draft = true,
+.draft = false,
 .custom = {},
 ---
 
-Containers have been all the rage for the past ten years,
-and the Unix concept of `chroot` is one of its key components: a `chroot`
-restricts the root `/` directory to a subdirectory of the main system.
-In this article I cover how `chroot` can be
-used to run `glibc` software on a `musl`-based system, modify
-a Linux system from inside another without booting it, and create environments for
-development demonstrations.
-
-## Requirements
-
-All we will need is a Linux system with the basic Unix/Posix utilities. The section
-on graphical applications assumes that your system is running a [Wayland][1] compositor (I
-used [Sway][2]).
-
-## Setting up a root directory
-
-The `chroot` utility runs a command with the given directory set as the root `/`
-directory of the filesystem. There are many use cases for such a tool, e.g.
-to sandbox an application so that it cannot mess with files outside of its purview.
+The `chroot` utility runs a process with the given directory set as the root `/`
+directory of its filesystem. There are many use cases for such a tool, e.g.
+to mess with a different Linux system without booting it,
+to run `glibc` software on a `musl`-based host, or to test examples on
+a fresh system.
 
 This article will not dwell on security concerns: we'll assume the
 software we run is not adversiarial. If secure sandboxing is your primary
 interest, then further measures beyond `chroot` are necessary
-to set up a true *container*, e.g.
-[namespaces][3] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
-manages all these aspects together.
+to set up a true [*container*][8], e.g.
+[namespaces][7] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
+automatically manages all these aspects for you.
+
+## [Table of Contents]($section.id('toc'))
+
+ 1. [Setting up a root directory](#sysroot)
+ 2. [Sharing kernel drivers and hardware](#hardware)
+ 3. [Network access](#network)
+ 4. [Terminal interfaces](#terminal)
+ 5. [Display windows and audio](#graphics)
+ 6. [Full script with cleanup](#script)
+
+## [Setting up a root directory]($section.id('sysroot'))
+
+The easiest way to setup a sysroot is to download a prebuilt one from a Linux
+distribution, e.g. the rootfs tarball from [Void Linux][3].
+
+```bash
+$ mkdir void_sysroot && cd void_syroot
+$ wget https://repo-default.voidlinux.org/live/current/void-x86_64-ROOTFS-20250202.tar.xz
+$ tar -xpf void-x86_64-ROOTFS-20250202.tar.xz
+$ ls
+bin   dev  home  lib32  media  opt   root  sbin  tmp  var
+boot  etc  lib   lib64  mnt    proc  run   sys   usr
+$ cd ..
+```
+
+We should set everything in our sysroot to be owned by the `root` user.
+
+```bash
+$ sudo chown -R root:root void_sysroot/*
+```
+
+Now we can simply `chroot` into a shell.
+
+```bash
+$ sudo chroot $PWD/void_sysroot /bin/bash
+bash-5.3# ls
+bin  boot  dev	etc  home  lib	lib32  lib64  media  mnt  opt  proc  root  run	sbin  sys  tmp	usr  var
+bash-5.3# ldd /usr/bin/ls
+    linux-vdso.so.1 (0x00007e1ab535d000)
+    libcap.so.2 => /usr/lib/libcap.so.2 (0x00007e1ab5319000)
+    libc.so.6 => /usr/lib/libc.so.6 (0x00007e1ab512f000)
+    /lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007e1ab535f000
+```
+
+We are inside a Void Linux sysroot and can run the included dynamic binaries
+with the included program interpreter and dynamic libraries.
+
+## [Sharing kernel drivers and hardware]($section.id('hardware'))
+
+Not everything is going to work yet.
+
+```bash
+bash-5.3# ls /dev/
+bash-5.3# ls /sys/
+bash-5.3# ls /proc/
+bash-5.3# exit
+```
+
+We have no `/dev`, `/sys`, or `/proc` directories! If we ever need to take advantage of
+drivers or other system files then we are fresh out of luck. This may be desirable if
+you don't want to allow such access, but a problem if you want a fully functional
+sandbox. We can remedy this by binding the relevant filesystems within the sysroot.
+
+```bash
+$ sudo mount -t proc none $PWD/void_sysroot/proc
+$ sudo mount -t sysfs none $PWD/void_sysroot/sys
+$ sudo mount -t tmpfs tmpfs $PWD/void_sysroot/tmp
+$ sudo mount -t tmpfs tmpfs $PWD/void_sysroot/run
+$ sudo mount --rbind --make-rslave /dev $PWD/void_sysroot/dev
+$ sudo chroot $PWD/void_sysroot /bin/bash
+bash-5.3# ls /sys/
+block  bus  class  dev  devices  firmware  fs  hypervisor  kernel  module  power
+```
+
+The combination of `--rbind` and `--make-rslave` allows the host to add device nodes
+to the sysroot, but does not propogate changes to the syroot's `/dev` back
+to the host.
+
+After you finish using your sysroot you should clean up the mount bindings.
+
+```bash
+bash-5.3# exit
+$ umount $PWD/void_sysroot/proc
+$ umount $PWD/void_sysroot/sys
+$ umount $PWD/void_sysroot/run
+$ umount $PWD/void_sysroot/tmp
+$ umount -R $PWD/void_sysroot/dev
+```
+
+## [Network access]($section.id('network'))
+
+Allowing network access is generally as simple as sharing the `resolve.conf`
+file from host to guest.
+
+```bash
+$ cp /etc/resolv.conf $PWD/void_sysroot/etc/resolv.conf
+```
+
+## [Terminal interfaces]($section.id('terminal'))
+
+It's also often useful to share `terminfo` to allow TUIs to function
+correctly.
+
+```bash
+$ mkdir -p $PWD/void_sysroot/usr/share/terminfo
+$ cp -r /usr/share/terminfo/* $PWD/void_sysroot/usr/share/terminfo/
+```
+
+## [Display windows and audio]($section.id('graphics'))
+
+Even if you install compatible graphics and/or audio libraries within
+your sysroot, binaries
+run within a sysroot won't be able to interact with the host.
+E.g. if you install `libwayland` within a sysroot and your host is running a
+Wayland compositor, you won't automatically be able to open Wayland windows
+from a `chroot`.
+Sharing the `$XDG_RUNTIME_DIR` will allow most applications to work.
+
+```bash
+$ mkdir -p $PWD/fs$XDG_RUNTIME_DIR
+$ mount --bind --make-rslave $XDG_RUNTIME_DIR $PWD/fs$XDG_RUNTIME_DIR
+```
+
+Once again we pass `--bind` and `--make-rslave` for one way propogation of
+changes from host to the sysroot.
+
+## [Full script with cleanup]($section.id('script'))
+
+The following script performs all of the above setup for a given sysroot
+directory, then cleans up after the `chroot` shell exits.
+
+```bash
+# chroot.sh
+#     usage: ./chroot.sh path_to_sysroot
+
+# set up special Linux system directories
+mount -t proc none $1/proc
+mount -t sysfs none $1/sys
+mount -t tmpfs tmpfs $1/tmp
+mount -t tmpfs tmpfs $1/run
+mount --rbind --make-rslave /dev $1/dev
+
+# share terminfo
+mkdir -p $1/usr/share/terminfo
+cp -r /usr/share/terminfo/* $1/usr/share/terminfo/
+
+# share XDG_RUNTIME_DIR
+mkdir -p $1$XDG_RUNTIME_DIR
+mount --bind --make-rslave $XDG_RUNTIME_DIR $1$XDG_RUNTIME_DIR
+
+# share network config
+cp /etc/resolv.conf $1/etc/resolv.conf
+
+chroot $1 /bin/bash
+
+# unmount bindings and filesystems
+umount $1$XDG_RUNTIME_DIR
+umount $1/proc
+umount $1/sys
+umount $1/run
+umount $1/tmp
+umount -R $1/dev
+```
 
 [1]: https://wayland.freedesktop.org/
 [2]: https://swaywm.org/
+[3]: https://voidlinux.org/download/
+[4]: https://en.wikipedia.org/wiki/Cgroups
+[5]: https://btholt.github.io/complete-intro-to-containers/intro
+[6]: https://www.docker.com/
+[7]: https://en.wikipedia.org/wiki/Linux_namespaces
+[8]: https://en.wikipedia.org/wiki/Containerization_(computing)
