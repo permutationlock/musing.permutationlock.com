@@ -24,8 +24,9 @@ in using the framework itself, the [`Makefile`][52] was
 exactly the command-line build process proof of concept I was after.
 
 In this article we'll walk through the steps required to acquire the SDK
-build tools, write a minimal OpenGL app in C, and package a `.apk` file
-to install on an Android device.
+build tools, write a minimal OpenGL app in C, package a `.apk` file,
+install the app on an Android device, and even how to halt
+and step through device code in [`lldb`][66].
 
 ## [Table of Contents]($section.id('toc'))
 
@@ -108,7 +109,60 @@ All the files we need should now be installed.
 
 For brevity, and to accommodate different installations, from now on we will
 omit the full path and refer to each of the above files by name.
-Optionally, we can add each relevant directory our `PATH`.
+Optionally, we could add each relevant directory our `PATH`.
+
+#### *A note on USB debugging and Linux permissions*
+
+To use `adb` (Android Debug Bridge) on Linux, we may need to
+configure certain
+permissions and [`udev`][65] rules.
+If you are on
+a non-standard distribution that doesn't use `udev`, you are probably better
+off using the static SDK distribution discussed in the next section.
+
+Try running an `adb` command to see if it works.
+
+```bash
+$ adb devices
+* daemon not running; starting now at tcp:5037
+* daemon started successfully
+adb: insufficient permissions for device: user aven is not in the plugdev group
+```
+
+If we get the above error, then we must add our user to the `plugdev`
+group.
+
+```bash
+$ adb devices
+* daemon not running; starting now at tcp:5037
+* daemon started successfully
+adb: insufficient permissions for device: missing udev rules? user is in the plugdev group
+```
+
+If we get the new error above, we need to add a `udev` rule.
+Assume that we have an Android test device
+plugged in over USB, with [USB debugging enabled][18].
+
+```bash
+$ sudo mkdir -p /etc/udev/rules.d
+$ lsusb
+Bus 001 Device 001: ID 1b0d:0602 Linux Foundation 2.0 root hub
+Bus 001 Device 002: ID 1e63:53d8 IMC Networks USB2.0 HD UVC WebCam
+Bus 001 Device 003: ID 8a20:078a Intel Corp. Bluetooth wireless interface
+Bus 001 Device 048: ID 11e8:4ed7 Google Inc. Nexus/Pixel Device (charging + debug)
+Bus 002 Device 001: ID 1b0d:0063 Linux Foundation 3.0 root hub
+$ sudo echo \
+    'SUBSYSTEM=="usb", ATTR{idVendor}=="11e8", ATTR{idProduct}=="4ed7", MODE="0666", GROUP="plugdev"' \
+    > /etc/udev/rules.d/51-android.rules
+$ sudo udevadm control --reload
+$ adb kill-server
+$ adb devices
+List of devices attached
+3A151KEBN14327	device
+```
+
+If we still receive an error, we should again kill the `adb` server,
+then unplug and re-plug the device's usb cable. 
 
 #### A static alternative for Linux
 
@@ -1449,16 +1503,19 @@ other architectures with [emulators][30].
 
 ## [Debugging native code with `lldb`]($section.id('lldb'))
 
-Attaching a debugger to an app is not a particularly well
+This section covers how use using `adb` and [`lldb`][66]
+to step-debug native C code that is running on an Android device.
+Attaching a debugger to an app is not a well
 docmented process, but it is possible. The trick is to get an
-`lldb-server` running with sufficient permissions to both debug
-the running app's process and listen on a tcp port. Then we can
-simply use `adb` to forward the tcp port to our host machine
+`lldb-server` running on the device, with sufficient permissions
+to both debug the running app's process and listen on a tcp port.
+Then we can use `adb` to forward the tcp port to our host machine
 and connect to the server with `lldb`.
 
 Android uses [SELinux][64] and each app is run by a corresponding
-user with only the necessary permissions. For `lldb-server`
-to debug `seglapp.apk` it must run under the same `org.seglorg.seglapp`
+user given the minimum necessary permissions. These permissions
+are mainly requested via the manifest XML file. For `lldb-server`
+to debug `seglapp.apk`, it must run under the same `org.seglorg.seglapp`
 user. But for that user to be able to listen on a tcp port,
 the `seglapp.apk` must request permissions to access the network.
 
@@ -1479,11 +1536,12 @@ the `seglapp.apk` must request permissions to access the network.
 ```
 
 Then we'll need to build
-our code with debug symbols and re-package `seglapp.apk`.
+our code with debug symbols and re-package `seglapp.apk` from
+ground zero.
 
 ```bash
 $ adb uninstall org.seglorg.seglapp
-$ rm temp.apk temp2.apk seglapp.apk
+$ rm -R build temp.apk temp2.apk seglapp.apk
 $ aapt package -v -f  -F ./temp.apk -I android.jar \
     -M ./template/AndroidManifest.xml \
     -S ./template/res --target-sdk-version 35
@@ -1669,3 +1727,5 @@ See [GitHub][9] for a full version of the example project.
 [62]: https://github.com/mackron/miniaudio
 [63]: https://android.googlesource.com/platform/bionic/+/466dbe4/libc/include/sys/system_properties.h#47
 [64]: https://en.wikipedia.org/wiki/Security-Enhanced_Linux
+[65]: https://en.wikipedia.org/wiki/Udev
+[66]: https://lldb.llvm.org/
