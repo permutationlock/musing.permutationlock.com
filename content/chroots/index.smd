@@ -20,7 +20,7 @@ to set up a true [*container*][8], e.g.
 [namespaces][7] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
 automatically manages all these aspects for you.
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
  1. [Setting up a root directory](#sysroot)
  2. [Sharing kernel drivers and hardware](#hardware)

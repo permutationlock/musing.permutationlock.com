@@ -28,7 +28,7 @@ build tools, write a minimal OpenGL app in C, package a `.apk` file,
 install the app on an Android device, and even how to halt
 and step through device code in [`lldb`][66].
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
  1. [Requirements](#requirements)
  2. [Packaging an Android APK](#apk)

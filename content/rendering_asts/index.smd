@@ -13,7 +13,7 @@ This article covers my
 experience writing [`aven-cfmt`][8], a zero-dependency
 C parser and renderer.
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
  1. [Motivation](#motivation)
  2. [C is hard](#hard)

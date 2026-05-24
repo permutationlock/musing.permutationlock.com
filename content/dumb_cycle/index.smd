@@ -34,7 +34,7 @@ That was undoubtedly a bit stupid, but I refer you to the project title.
 
 Code for the finished game is available on [GitHub][3].
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
  1. [Requirements](#requirements)
  2. [Creating an executable: an entry point in assembly](#entry)

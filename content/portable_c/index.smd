@@ -18,7 +18,7 @@ I test all projects
 with [`gcc`][2], [`clang`][3], [`tcc`][4], [`cproc`][1], and
 [`cl.exe`][6]---and most will even build with [`chibicc`][5].
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
 1. [Code](#code)
     1. [Project structure](#project)

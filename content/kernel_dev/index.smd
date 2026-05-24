@@ -16,7 +16,7 @@ bare-bones initramfs system emulation,
 debugging code that runs in kernel space, kernel modules, and testing
 kernel code within a full Linux distribution.
 
-## [Table of Contents]($section.id('toc'))
+## [Table of contents]($section.id('toc'))
 
  1. [Requirements](#requirements)
  2. [Building the Linux kernel](#building_linux)
