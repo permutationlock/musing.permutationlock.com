@@ -146,6 +146,11 @@ $ mkdir -p $PWD/void_sysroot/usr/share/terminfo
 $ cp -r /usr/share/terminfo/* $PWD/void_sysroot/usr/share/terminfo/
 ```
 
+Once again, this is writing into the sysroot here, which
+is potentially dangerous.
+It may be a good idea to save and restore the `terminfo` directory if
+the given sysroot is not a simple sandbox.
+
 ## [Display windows and audio]($section.id('graphics'))
 
 Even if you install compatible graphics and/or audio libraries within
