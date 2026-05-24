@@ -9,9 +9,9 @@
 
 The `chroot` utility runs a process with the given directory set as the root `/`
 directory of its filesystem. There are many use cases for such a tool, e.g.
-to mess with a different Linux system without booting it,
-to run `glibc` software on a `musl`-based host, or to test examples on
-a fresh system.
+to mess around in a Linux system without booting it,
+to run [`glibc`][10] software on a [`musl`][9]-based host, or to test examples
+in a fresh sandbox.
 
 This article will not dwell on security concerns: we'll assume the
 software we run is not adversiarial. If secure sandboxing is your primary
@@ -19,6 +19,18 @@ interest, then further measures beyond `chroot` are necessary
 to set up a true [*container*][8], e.g.
 [namespaces][7] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
 automatically manages all these aspects for you.
+
+**Warning:** A lot of the advice in this article assumes that we
+are working in a fresh sysroot built for the purpose of
+serving as a `chroot` jail on the current system. If you instead
+use the root file system
+of an existing Linux install, e.g. from another hard drive or a
+virtual machine, then it is
+*very dangerous* to perform operations that modify
+system configurations involving drivers and hardware. It's
+probably not a good idea to run `sudo apt upgrade` while you
+are `chroot`'ed into the filesystem on the drive from your second
+Linux box.
 
 ## [Table of contents]($section.id('toc'))
 
@@ -31,8 +43,10 @@ automatically manages all these aspects for you.
 
 ## [Setting up a root directory]($section.id('sysroot'))
 
-The easiest way to setup a sysroot is to download a prebuilt one from a Linux
-distribution, e.g. the rootfs tarball from [Void Linux][3].
+The easiest way to get a fully functional sysroot is to download a
+prebuilt archive from a Linux distribution, e.g. the rootfs tarball from
+[Void Linux][3].
+
 
 ```bash
 $ mkdir void_sysroot && cd void_syroot
@@ -117,6 +131,11 @@ file from host to guest.
 $ cp /etc/resolv.conf $PWD/void_sysroot/etc/resolv.conf
 ```
 
+**Warning:** If you are `chroot` entering an existing system, not just the
+Void sandbox we created, then you should save the
+the `resolv.conf` file before overwriting it, and restore it afterwards;
+see the final [`bash` script](#script).
+
 ## [Terminal interfaces]($section.id('terminal'))
 
 It's also often useful to share `terminfo` to allow TUIs to function
@@ -169,10 +188,14 @@ cp -r /usr/share/terminfo/* $1/usr/share/terminfo/
 mkdir -p $1$XDG_RUNTIME_DIR
 mount --bind --make-rslave $XDG_RUNTIME_DIR $1$XDG_RUNTIME_DIR
 
-# share network config
+# share host network config
+cp $1/etc/resolv.conf $1/etc/resolv.conf.chroot.old
 cp /etc/resolv.conf $1/etc/resolv.conf
 
 chroot $1 /bin/bash
+
+# restore guest network config
+mv $1/etc/resolv.conf.chroot.old $1/etc/resolv.conf
 
 # unmount bindings and filesystems
 umount $1$XDG_RUNTIME_DIR
@@ -191,3 +214,5 @@ umount -R $1/dev
 [6]: https://www.docker.com/
 [7]: https://en.wikipedia.org/wiki/Linux_namespaces
 [8]: https://en.wikipedia.org/wiki/Containerization_(computing)
+[9]: https://musl.libc.org
+[10]: https://www.gnu.org/software/libc/
