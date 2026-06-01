@@ -932,6 +932,8 @@ i32 main(i32 argc, char **argv) {
 /* ... */
 ```
 
+### [Strict aliasing]($section.id('strict_aliasing'))
+
 You may be wondering why we created a separate `src/mem.c`
 file. The truth is that it would almost certainly be
 fine to place the definition of the `alloc`
@@ -957,7 +959,7 @@ an effective type from a prior write.
 In most cases it is fine if the memory returned by `alloc` has an effective type:
 we will almost always explicitly write data into
 allocated memory before we read from it.
-Unfortunately, in the next section we will run into a situation where
+Unfortunately, in the [next section](#strict_aliasing2) we will run into a situation where
 technicalities arise.
 
 For a contrived example of how issues crop up, let us suppose
@@ -1281,10 +1283,12 @@ sole control over reading input events. Each acquired keyboard file
 descriptor will be written into a caller provided `keyboards` array output
 parameter.
 
+### [Strict aliasing in practice]($section.id('strict_aliasing2'))
+
 It may seem strange that we use an arena to dynamically allocate
 memory for the fixed size 1024 byte `dirents` buffer. The reason for
-this is subtle and directly related to the effective type issue discussed in
-the <em>making memory</em> section above.
+this is subtle and directly related to the effective type issue
+[discussed above](#strict_aliasing).
 
 During the `getdents` syscall the operating system will
 write zero or more `struct dirent` entries into the memory pointed to by
