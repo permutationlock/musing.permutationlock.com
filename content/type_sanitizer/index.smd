@@ -1,39 +1,202 @@
 ---
 .title = "Aliasing, arenas, and sanitizers",
-.date = @date("2025-12-11T00:00:00"),
+.date = @date("2026-06-01T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
-.draft = true,
+.draft = false,
 .custom = {},
 ---
 
 In this article I discuss how memory arenas interact with
-strict type aliasing in C, and how to use the `clang` type sanitizer
+strict type aliasing in C, and how to use the `clang` [type sanitizer][4]
 to check compliance.
 
-## Requirements
+## Table of contents
+
+ 1. [Requirements](#requirements)
+ 2. [Strict aliasing](#strict_aliasing)
+ 3. [Memory arenas](#memory_arenas)
+ 4. [Arenas and aliasing](#arena_aliasing)
+ 5. [Type sanitizer](#type_sanitizer)
+
+## [Requirements]($section.id('requirements'))
 
 We will need GNU libc based Linux system with the `clang` C compiler. If
 you are running a non-GNU system, e.g. one using musl libc, then you can
-simply install `clang` within a GNU `chroot` container.
+simply install `clang` within a [GNU `chroot`](/chroots/).
 
-## Strict aliasing in C
+## [Strict aliasing in C]($section.id('strict_aliasing'))
 
 According to the C standard, it is never valid to read memory
 through a pointer of type `T *ptr` if the type of the *object*
 is not compatible with `T` (unless `T` is a character type, e.g.
-`char`). Here an *object* refers to either a variable with
-a declared type (e.g. for `int x;`, the object at `&x`
+`char`). Here an *object* refers to either a variable
+(e.g. for `int x;`, the object at `&x`
 in memory has type `int`), or a location in untyped memory (e.g. memory returned
 by `malloc`) where a value has
 been written (e.g. `int *x = malloc(sizeof(int));` `*x=1;` gives the object
-at `x` in memory type `int`).
+at `x` type `int`).
 
-Some projects prefer to ignore strict aliasing and
-disable any associated optimizations in their compiler (e.g. pass
-`-fno-strict-aliasing` to `gcc` or `clang`). I personally abide
-by strict aliasing because I find it simple to do so; if I ever need to
-memory [type pun][1] incompatible types, then I use a `union`.
+Common practices forbidden by the strict aliasing rule include
+[type punning][1] through pointer casting (e.g. `float f = 1.337f;`
+`int x = *(int *)&f;`)
+and writing into stack allocated buffers
+(e.g. to put a [flexible length
+`struct dirent` object](/dumb_cycle/#strict_aliasing2) on the stack
+with `char dents[1024];` `getdents(fd, dents, 1024);`).
+
+**Note:** Some projects ignore strict aliasing and simply choose to
+disable the [associated optimizations][2] (e.g. by passing
+`-fno-strict-aliasing` to `gcc` or `clang`). This can be quite
+costly for performance, however.
+
+## [Memory arenas]($section.id('memory_arenas'))
+
+A memory arena is a contiguous chunk of virtual memory
+with a method to allocate memory by taking the chunk
+immediately at the bottom (or top); see below ([or here][3]).
+
+```c
+struct arena {
+    char *start;
+    char *end;
+};
+
+void *arena_alloc(struct arena *arena, ptrdiff_t size, uintptr_t align) {
+    assert((align & (align - 1)) == 0); // align must be power of 2
+    if (size > (arena->end - arena->start))
+        abort();
+    arena->end -= size;
+    arena->end = (char *)(((uintptr_t)arena->end) & (~(align - 1)));
+    return arena->end;
+}
+```
+
+Arenas can allocate, but never free (some arenas can free in
+certain situations). They are used to group memory allocations by lifetimes,
+to use Rust parlence: memory allocated from a given arena object
+will exist as long as the arena object exists. For an example, see below.
+
+```c
+struct res {
+    struct part1 *part1;
+    struct part2 *part2;
+};
+
+struct res *func(
+    struct input *inputs,
+    size_t inputs_count,
+    struct arena *arena
+) {
+    // try each input, discard all unused allocations
+    for (size_t i = 0; i < inputs_count; i++) {
+        struct arena temp_arena = *arena;
+        struct res res;
+
+        res.part1 = try_part1(inputs[i], &temp_arena);
+        if (!res.part1)
+            continue;
+
+        res.part2 = try_part2(inputs[i], &temp_arena);
+        if (!res.part2)
+            continue;        
+
+        // commit temp allocations to main arena
+        *arena = temp_arena;
+        return res;
+    }
+
+    return 0;
+}
+```
+
+## [Arenas and aliasing]($section.id('arena_aliasing'))
+
+We would like to be able to use memory returned from `arena_alloc`
+in all of the same ways as memory returned from `malloc`.
+However, if memory from an arena is ever re-used, as seen above
+with `temp_arena`, then we face potential aliasing issues.
+
+```c
+    // ...
+    // if memory under buffer has an object type from a prior write
+    void *buffer = arena_alloc(arena, 1024);
+    long ndents = getdents(fd, buffer, 1024);
+    if (ndents > 0) {
+        struct dirent *dirent = buffer;
+        // then reading from dirent breaks strict aliasing
+        char *name = dirent->name;
+        // ...
+    }
+    // ...
+```
+
+Practically speaking this will almost never conflict with compiler
+optimizations, but it is a strict aliasing violation. We can
+annotate the `arena_alloc` with the GNU `malloc` attribute to tell
+`gcc`/`clang` that the pointer returned is to
+untyped memory that does not alias,
+or we could compile `arena_alloc` in a separate translation unit.
+
+
+```c
+// ...
+__attribute__((malloc))
+void *arena_alloc(struct arena *arena, ptrdiff_t size, uintptr_t align) {
+// ...
+```
+
+## [Type sanitizer]($section.id('type_sanitizer'))
+
+The `clang` compiler provides a [sanitizer][4] for verifying compliance
+with the strict aliasing rule, enabled by the `-fsanitize=type` flag.
+Unfortunately such analysis does not take into account the
+`malloc` attribute; it handles `malloc` by overriding the default
+`malloc` symbol with a custom one that clears aliasing.
+
+```c
+// llvm-project/compiler-rt/lib/tysan/tysan_interceptors.cpp
+// ...
+INTERCEPTOR(void *, malloc, uptr size) {
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size);
+  void *res = REAL(malloc)(size);
+  if (res)
+    __tysan_set_type_unknown(res, size);
+  return res;
+}
+// ...
+```
+
+To use the type sanitizer with our own arena allocator, we simply
+need to call `__tysan_set_type_unknown`.
+
+```c
+struct arena {
+    char *start;
+    char *end;
+};
+
+#if defined(__has_feature) and defined(__clang__)
+    #if __has_feature(type_sanitizer)
+        #define ARENA_CLANG_TYSAN
+        void tysan_set_type_unknown(const void *addr, uintptr_t size);
+    #endif
+#endif
+void *arena_alloc(struct arena *arena, ptrdiff_t size, uintptr_t align) {
+    assert((align & (align - 1)) == 0); // align must be power of 2
+    if (size > (arena->end - arena->start))
+        abort();
+    arena->end -= size;
+    arena->end = (char *)(((uintptr_t)arena->end) & (~(align - 1)));
+    #if defined(ARENA_CLANG_TYSAN)
+        tysan_set_type_unknown(arena->end, size);
+    #endif
+    return arena->end;
+}
+```
 
 [1]: https://en.wikipedia.org/wiki/Type_punning
-[2]: 
+[2]: https://old.reddit.com/r/C_Programming/comments/1l3sdrq/what_exactly_is_the_performance_benefit_of_strict/mw3v43g/
+[3]: https://nullprogram.com/blog/2023/09/27/
+[4]: https://clang.llvm.org/docs/TypeSanitizer.html
