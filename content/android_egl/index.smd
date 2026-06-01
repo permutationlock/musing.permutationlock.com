@@ -113,7 +113,7 @@ Optionally, we could add each relevant directory our `PATH`.
 
 #### *A note on USB debugging and Linux permissions*
 
-To use `adb` (Android Debug Bridge) on Linux, we may need to
+To use [`adb` (Android Debug Bridge)][67] on Linux, we may need to
 configure certain
 permissions and [`udev`][65] rules.
 If you are on
@@ -1729,3 +1729,4 @@ See [GitHub][9] for a full version of the example project.
 [64]: https://en.wikipedia.org/wiki/Security-Enhanced_Linux
 [65]: https://en.wikipedia.org/wiki/Udev
 [66]: https://lldb.llvm.org/
+[67]: https://developer.android.com/tools/adb
