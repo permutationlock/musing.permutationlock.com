@@ -20,17 +20,13 @@ to set up a true [*container*][8], e.g.
 [namespaces][7] and [cgroups][4] (see [this blog][5]). Containerization software such as [Docker][6]
 automatically manages all these aspects for you.
 
-**Warning:** A lot of the advice in this article assumes that we
+**Warning:** A lot of this article assumes that we
 are working in a fresh sysroot built for the purpose of
 serving as a `chroot` jail on the current system. If you instead
 use the root file system
-of an existing Linux install, e.g. from another hard drive or a
-virtual machine, then it is
-*very dangerous* to perform operations that modify
-system configurations involving drivers and hardware. It's
-probably not a good idea to run `sudo apt upgrade` while you
-are `chroot`'ed into the filesystem on the drive from your second
-Linux box.
+of another Linux install, then it is potentially
+dangerous to perform operations within the `chroot` that modify
+the system.
 
 ## [Table of contents]($section.id('toc'))
 
@@ -132,7 +128,7 @@ $ cp /etc/resolv.conf $PWD/void_sysroot/etc/resolv.conf
 ```
 
 **Warning:** If you are `chroot` entering an existing system, not just the
-Void sandbox we created, then you should save the
+sandbox we created, then you should save the
 the `resolv.conf` file before overwriting it, and restore it afterwards;
 see the final [`bash` script](#script).
 
