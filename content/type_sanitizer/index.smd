@@ -1,5 +1,5 @@
 ---
-.title = "Aliasing, arenas, and sanitizers",
+.title = "Aliasing, Arenas, Sanitizers",
 .date = @date("2026-06-01T00:00:00"),
 .author = "Aven",
 .layout = "post.shtml",
@@ -169,7 +169,7 @@ INTERCEPTOR(void *, malloc, uptr size) {
 ```
 
 To use the type sanitizer with our own arena allocator, we simply
-need to call `__tysan_set_type_unknown`.
+need to call `tysan_set_type_unknown` ourselves.
 
 ```c
 struct arena {
