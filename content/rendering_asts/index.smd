@@ -22,6 +22,7 @@ C parser and renderer.
  5. [Parsing](#parsing)
  6. [Preprocessor](#preproc)
  7. [Rendering](#rendering)
+ 8. [Fuzzing](#fuzzing)
 
 ## [Motivation]($section.id('motivation'))
 
@@ -3989,6 +3990,87 @@ int x = 0; // a single trailing comment is allowed
 int y = 5; /* after the end of a line */
 ```
 
+## [Fuzzing]($section.id('fuzzing'))
+
+As mentioned above, the parser is ~10,000 lines of C,
+most of which I wrote over the course of two
+crazy weeks. I simultaneously developed a test suite by formatting
+the `libaven` and `aven-cfmt` source code, noting any crashes,
+and manually looking for formatting errors. Each time I found a crash
+or format error, I added test cases to ensure that it was fixed moving
+forward. But what about all the errors I couldn't catch using
+my own small codebase?
+
+[Fuzzing][18], or fuzz testing, is a technique to compile an instrumented
+version of a piece of software and systematically run it on
+structured random inputs in an attempt to trigger as
+many code execution paths as possible. In other words, it is an
+efficient way to verify that software will never crash,
+trigger assertions, or leak memory.
+
+The [`clang`][14] toolchain provides a dead simple built-in fuzz testing
+framework called [`libfuzzer`][15]. To use it we simply need to write a
+function that takes a chunk of random bytes. In our case, we treat the bytes
+as an input file and attempt to format it.
+
+```c
+#define AVEN_IMPLEMENTATION
+#include <aven.h>
+#include <aven/arena.h>
+#include <aven/io.h>
+#include <aven/c.h>
+
+#include <stdlib.h>
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    size_t mem_size = 100ULL * (size + 16);
+    void *mem = malloc(mem_size);
+    if (mem == NULL) {
+        aven_panic("malloc failed\n");
+    }
+    AvenArena temp_arena = aven_arena_init(mem, mem_size);
+    AvenStr src = aven_arena_create_slice(char, &temp_arena, size + 1);
+    memcpy(src.ptr, data, size);
+    get(src, size) = 0;
+    AvenIoWriter writer = aven_io_writer_init_sink();
+    AvenCFmtResult fmt_res = aven_c_fmt(src, &writer, 128, 4, 40, &temp_arena);
+    (void)fmt_res;
+    free(mem);
+    return 0;
+}
+```
+
+We can also provide the fuzzer with a dictionary of words to use, so it
+doesn't use completely random byte sequences. I manually created
+the [`cdict.txt`][16] dictionary. We build and run the fuzzer as follows.
+
+```bash
+$ clang -fsanitize-trap \
+    -fsanitize=unreachable \
+    -fsanitize=undefined \
+    -fsanitize=fuzzer \
+    -fsanitize=address \
+    -O2 -g3 \
+    -I ./include/ -I ./deps/libaven/include/ \
+    fuzz/fmt.c -o fuzz_fmt
+$ ./fuzz_fmt -max_len=20480 -jobs=4 -dict=fuzz/cdict.txt -timeout=2
+```
+
+The fuzzer will run indefinitely until it encounters an input
+that triggers a crash, sanitizer trap, or takes more than 2 seconds
+to complete.
+
+**Note:** With all sanitizers enabled the code is much
+slower than a release binary, and thus the 2 second timeout
+for up to 20KB inputs ensures closer to a 200ms timeout in practice.
+That is still much longer than it should take to format
+an input of any size ([see benchmarks][17]),
+but it will ensure that there are no pathological
+inputs that hang catastrophically.
+I wanted to be
+able to run the fuzzer even on very slow processors,
+e.g. a Celeron N3350.
+
 [1]: https://nullprogram.com/
 [2]: https://ziglang.org/
 [3]: https://clang.llvm.org/docs/ClangFormat.html
@@ -4002,3 +4084,8 @@ int y = 5; /* after the end of a line */
 [11]: https://clang.llvm.org/docs/ClangFormatStyleOptions.html
 [12]: https://github.com/permutationlock/libaven
 [13]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf
+[14]: https://clang.llvm.org/
+[15]: https://llvm.org/docs/LibFuzzer.html
+[16]: https://github.com/permutationlock/aven-cfmt/blob/main/fuzz/cdict.txt
+[17]: https://github.com/permutationlock/aven-cfmt/tree/main#performance
+[18]: https://en.wikipedia.org/wiki/Fuzzing
