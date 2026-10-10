@@ -1,0 +1,37 @@
+---
+.title = "No LLMs",
+.date = @date("2026-06-16T00:00:00"),
+.author = "Aven",
+.layout = "post.shtml",
+.draft = true,
+.custom = {},
+---
+
+I don't use LLMs to code, and I find it somewhat bizarre
+that everyone else does. The reason is simple: I want to have
+control over my tools and the projects I make. I want to
+be able to work even if I'm using a [$109 Chromebook][5]
+flashed with [Mr Chromebox UEFI firmware][4] that
+runs [Void Linux][6] while living off-grid in a tent. (Hypothetically...)
+It's the same reason I don't use proprietary game engines or IDEs,
+but with costs raised exponentially; I'm not sure if there
+is a reward great enough for me to pay $200 a month and require an
+internet connection and/or
+a beefy compute machine just to type some text.
+
+I find it bizarre that "AI" is reviled in every other creative field,
+but almost ubiquitously accepted in coding. There are a few projects
+that are explicitly against LLM
+use, e.g. [Zig][3], but they are extreme outliers.
+Coding is an
+art with personal expression like any other, I don't see the
+difference between slop drawing, slop prose, and slop code. I'm not
+even on board with most moral arguments against AI, I just
+see that it is ruining everything I like about the world.
+
+[1]: https://www.thiswaifudoesnotexist.net/
+[2]: https://play.aidungeon.com/
+[3]: https://ziglang.org/code-of-conduct/#strict-no-llm-no-ai-policy
+[4]: https://docs.mrchromebox.tech/
+[5]: https://www.amazon.com/ASUS-Chromebook-C223NA-DH02-Dual-Core-Processor/dp/B07M9SN277
+[6]: https://voidlinux.org/

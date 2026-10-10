@@ -29,9 +29,10 @@ simply install `clang` within a [GNU `chroot`](/chroots/).
 
 According to the C standard, it is never valid to read memory
 through a pointer of type `T *ptr` if the type of the *object*
+in memory
 is not compatible with `T` (unless `T` is a character type, e.g.
 `char`). Here an *object* refers to either a variable
-(e.g. for `int x;`, the object at `&x`
+(e.g. for `int x;` the object at `&x`
 in memory has type `int`), or a location in untyped memory (e.g. memory returned
 by `malloc`) where a value has
 been written (e.g. `int *x = malloc(sizeof(int));` `*x=1;` gives the object
@@ -72,8 +73,8 @@ void *arena_alloc(struct arena *arena, ptrdiff_t size, uintptr_t align) {
 }
 ```
 
-Arenas can allocate, but never free (some arenas can free in
-certain situations). They are used to group memory allocations by lifetimes,
+Arenas can allocate, but never free (well, some arenas can free in
+[certain situations][5]). They are used to group memory allocations by lifetimes,
 to use Rust parlence: memory allocated from a given arena object
 will exist as long as the arena object exists. For an example, see below.
 
@@ -200,3 +201,4 @@ void *arena_alloc(struct arena *arena, ptrdiff_t size, uintptr_t align) {
 [2]: https://old.reddit.com/r/C_Programming/comments/1l3sdrq/what_exactly_is_the_performance_benefit_of_strict/mw3v43g/
 [3]: https://nullprogram.com/blog/2023/09/27/
 [4]: https://clang.llvm.org/docs/TypeSanitizer.html
+[5]: https://nullprogram.com/blog/2023/10/05/

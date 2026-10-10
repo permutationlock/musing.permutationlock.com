@@ -118,25 +118,25 @@ libavengraph/
         graph/
     deps/
         libavengl/
-        include/
-        deps/
-            libaven/
-                include/
-            glfw/
-                include/
-                src/
-                glfw.c
-            stb/
-                include/
-                stb.c
-            gles3/
-                include/
-            wayland/
-                include/
-            X11/
-                include/
-            xkbcommon/
-                include/
+            include/
+            deps/
+                libaven/
+                    include/
+                glfw/
+                    include/
+                    src/
+                    glfw.c
+                stb/
+                    include/
+                    stb.c
+                gles3/
+                    include/
+                wayland/
+                    include/
+                X11/
+                    include/
+                xkbcommon/
+                    include/
 ```
 
 The `visualization/`
